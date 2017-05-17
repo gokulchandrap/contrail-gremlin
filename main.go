@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -11,6 +12,12 @@ import (
 	"github.com/Jeffail/gabs"
 	"github.com/go-gremlin/gremlin"
 	"github.com/gocql/gocql"
+	logging "github.com/op/go-logging"
+)
+
+var log = logging.MustGetLogger("gremlin-loader")
+var format = logging.MustStringFormatter(
+	`%{color}%{time:15:04:05.000} %{shortfunc} ▶ %{level:.4s} %{id:03x}%{color:reset} %{message}`,
 )
 
 type Link struct {
@@ -42,58 +49,63 @@ func (n Node) Create() error {
 	return err
 }
 
-func findValues(prefix string, c *gabs.Container, p map[string]interface{}) {
+func (n Node) AddProperties(prefix string, c *gabs.Container) {
 	if _, ok := c.Data().([]interface{}); ok {
 		childs, _ := c.Children()
 		for _, child := range childs {
-			findValues(prefix, child, p)
+			n.AddProperties(prefix, child)
 		}
 		return
 	}
 	if _, ok := c.Data().(map[string]interface{}); ok {
 		childs, _ := c.ChildrenMap()
 		for key, child := range childs {
-			findValues(prefix+"."+key, child, p)
+			n.AddProperties(prefix+"."+key, child)
 		}
 		return
 	}
 	if str, ok := c.Data().(string); ok {
-		addValue(prefix, str, p)
+		n.AddProperty(prefix, str)
 		return
 	}
 	if num, ok := c.Data().(float64); ok {
-		addValue(prefix, num, p)
+		n.AddProperty(prefix, num)
 		return
 	}
 	if boul, ok := c.Data().(bool); ok {
-		addValue(prefix, boul, p)
+		n.AddProperty(prefix, boul)
 		return
 	}
-	addValue(prefix, "null", p)
+	n.AddProperty(prefix, "null")
 }
 
-func addValue(prefix string, value interface{}, p map[string]interface{}) {
-	if _, ok := p[prefix]; ok {
-		p[prefix] = append(p[prefix].([]interface{}), value)
+func (n Node) AddProperty(prefix string, value interface{}) {
+	if _, ok := n.Properties[prefix]; ok {
+		n.Properties[prefix] = append(n.Properties[prefix].([]interface{}), value)
 	} else {
-		p[prefix] = []interface{}{value}
+		n.Properties[prefix] = []interface{}{value}
 	}
 }
 
 func main() {
 
+	backend := logging.NewLogBackend(os.Stderr, "", 0)
+	backendFormatter := logging.NewBackendFormatter(backend, format)
+	logging.SetBackend(backendFormatter)
+
 	if err := gremlin.NewCluster("ws://localhost:8182/gremlin"); err != nil {
-		panic("Failed to connect to gremlin server.")
+		log.Fatal("Failed to connect to gremlin server.")
 	} else {
-		fmt.Println("Connected to Gremlin server.")
+		log.Notice("Connected to Gremlin server.")
 	}
 
+	log.Notice("Connecting to Cassandra...")
 	cluster := gocql.NewCluster("localhost")
 	cluster.Keyspace = "config_db_uuid"
 	cluster.Consistency = gocql.Quorum
 	session, _ := cluster.CreateSession()
 	defer session.Close()
-	fmt.Println("Connected to Cassandra.")
+	log.Notice("Connected.")
 
 	var uuid string
 	var key string
@@ -101,14 +113,13 @@ func main() {
 	var valueJSON []byte
 
 	var links []Link
-	var nodes []Node
 
 	uuids := session.Query(`SELECT DISTINCT key FROM obj_uuid_table`).Iter()
 	for uuids.Scan(&uuid) {
-
-		properties := make(map[string]interface{})
-		n := session.Query(`SELECT key, column1, value FROM obj_uuid_table WHERE key=?`, uuid).Iter()
-		for n.Scan(&key, &column1, &valueJSON) {
+		log.Debugf("Processing %s", uuid)
+		node := Node{UUID: uuid, Properties: map[string]interface{}{}}
+		r := session.Query(`SELECT key, column1, value FROM obj_uuid_table WHERE key=?`, uuid).Iter()
+		for r.Scan(&key, &column1, &valueJSON) {
 			split := strings.Split(column1, ":")
 			switch split[0] {
 			case
@@ -120,22 +131,24 @@ func main() {
 			case "prop":
 				value, err := gabs.ParseJSON(valueJSON)
 				if err != nil {
-					panic(fmt.Sprintf("Failed to parse %v", string(valueJSON)))
+					log.Fatalf("Failed to parse %v", string(valueJSON))
 				}
-				findValues(split[1], value, properties)
+				node.AddProperties(split[1], value)
 			}
 		}
+		if err := r.Close(); err != nil {
+			log.Fatal(err)
+		}
+		if err := node.Create(); err != nil {
+			log.Fatal(err)
+		} else {
+			log.Debugf("Node %v", node)
+		}
 
-		nodes = append(nodes, Node{UUID: uuid, Properties: properties})
-	}
-
-	for _, node := range nodes {
-		fmt.Printf("Create node %v\n", node)
-		node.Create()
 	}
 
 	for _, link := range links {
-		fmt.Printf("Create link %v\n", link)
+		log.Debugf("Create link %v", link)
 		link.Create()
 	}
 
