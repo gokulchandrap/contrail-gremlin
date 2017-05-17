@@ -21,3 +21,19 @@ Setup tunnel to Contrail DB
 Load Contrail DB in gremlin server
 
     ./gremlin-loader 
+
+Connect to server with Gremlin console
+======================================
+
+    wget http://www-eu.apache.org/dist/tinkerpop/3.2.4/apache-tinkerpop-gremlin-console-3.2.4-bin.zip
+    unzip apache-tinkerpop-gremlin-console-3.2.4-bin.zip
+    cd apache-tinkerpop-gremlin-console-3.2.4
+    bin/gremlin.sh
+
+In the console do
+
+    :remote connect tinkerpop.server conf/remote.yaml
+
+Then you can query the remote graph with ':>'
+
+    :> g.V()
