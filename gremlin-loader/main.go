@@ -12,6 +12,7 @@ import (
 	"github.com/Jeffail/gabs"
 	"github.com/go-gremlin/gremlin"
 	"github.com/gocql/gocql"
+	"github.com/jawher/mow.cli"
 	logging "github.com/op/go-logging"
 )
 
@@ -87,20 +88,20 @@ func (n Node) AddProperty(prefix string, value interface{}) {
 	}
 }
 
-func main() {
+func load(gremlinCluster []string, cassandraCluster []string) {
 
 	backend := logging.NewLogBackend(os.Stderr, "", 0)
 	backendFormatter := logging.NewBackendFormatter(backend, format)
 	logging.SetBackend(backendFormatter)
 
-	if err := gremlin.NewCluster("ws://localhost:8182/gremlin"); err != nil {
+	if err := gremlin.NewCluster(gremlinCluster...); err != nil {
 		log.Fatal("Failed to connect to gremlin server.")
 	} else {
 		log.Notice("Connected to Gremlin server.")
 	}
 
 	log.Notice("Connecting to Cassandra...")
-	cluster := gocql.NewCluster("localhost")
+	cluster := gocql.NewCluster(cassandraCluster...)
 	cluster.Keyspace = "config_db_uuid"
 	cluster.Consistency = gocql.Quorum
 	session, _ := cluster.CreateSession()
@@ -152,6 +153,21 @@ func main() {
 		link.Create()
 	}
 
+}
+
+func main() {
+	app := cli.App("gremlin-loader", "Load contrail DB in gremlin server")
+	gremlinSrvs := app.StringsOpt("gremlin", []string{"localhost:8182"}, "host:port of gremlin server nodes")
+	cassandraSrvs := app.StringsOpt("cassandra", []string{"localhost"}, "list of host of cassandra nodes, uses CQL port 9042")
+	app.Action = func() {
+		var gremlinCluster = make([]string, len(*gremlinSrvs))
+		for i, srv := range *gremlinSrvs {
+			gremlinCluster[i] = fmt.Sprintf("ws://%s/gremlin", srv)
+
+		}
+		load(gremlinCluster, *cassandraSrvs)
+	}
+	app.Run(os.Args)
 }
 
 type GremlinPropertiesEncoder struct {
