@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -34,6 +35,7 @@ func (l Link) Create() error {
 
 type Node struct {
 	UUID       string
+	Type       string
 	Properties map[string]interface{}
 }
 
@@ -45,7 +47,7 @@ func (n Node) Create() error {
 	if err != nil {
 		return err
 	}
-	query := fmt.Sprintf("g.addV(id, \"%s\")%s", n.UUID, encoder.String())
+	query := fmt.Sprintf("g.addV(id, \"%s\", label, \"%s\")%s", n.UUID, n.Type, encoder.String())
 	_, err = gremlin.Query(query).Exec()
 	return err
 }
@@ -118,7 +120,10 @@ func load(gremlinCluster []string, cassandraCluster []string) {
 
 	uuids := session.Query(`SELECT DISTINCT key FROM obj_uuid_table`).Iter()
 	for uuids.Scan(&uuid) {
-		node := Node{UUID: uuid, Properties: map[string]interface{}{}}
+		node := Node{
+			UUID:       uuid,
+			Properties: map[string]interface{}{},
+		}
 		r := session.Query(`SELECT key, column1, value FROM obj_uuid_table WHERE key=?`, uuid).Iter()
 		for r.Scan(&key, &column1, &valueJSON) {
 			split := strings.Split(column1, ":")
@@ -129,6 +134,16 @@ func load(gremlinCluster []string, cassandraCluster []string) {
 				"children",
 				"parent":
 				links = append(links, Link{Source: uuid, Target: split[2], Type: split[0]})
+			case "type":
+				var value string
+				json.Unmarshal(valueJSON, &value)
+				node.Type = value
+			case "fq_name":
+				var value []string
+				json.Unmarshal(valueJSON, &value)
+				for _, c := range value {
+					node.AddProperty("fq_name", c)
+				}
 			case "prop":
 				value, err := gabs.ParseJSON(valueJSON)
 				if err != nil {
