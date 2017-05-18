@@ -40,6 +40,9 @@ type Node struct {
 }
 
 func (n Node) Create() error {
+	if n.Type == "" {
+		return errors.New("Node has no type, skip.")
+	}
 	encoder := GremlinPropertiesEncoder{
 		stringReplacer: strings.NewReplacer(`"`, `\"`, "\n", `\n`, "\r", ``),
 	}
@@ -156,6 +159,7 @@ func load(gremlinCluster []string, cassandraCluster []string) {
 			log.Critical(err)
 		}
 		if err := node.Create(); err != nil {
+			fmt.Println()
 			log.Criticalf("Failed to create node %v : %s", node, err)
 		} else {
 			fmt.Print(`.`)
