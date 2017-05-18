@@ -31,7 +31,11 @@ type Link struct {
 }
 
 func (l Link) Create() error {
-	_, err := gremlin.Query("g.V(src).as('src').V(dst).addE(type).from('src')").Bindings(gremlin.Bind{"src": l.Source, "dst": l.Target, "type": l.Type}).Exec()
+	_, err := gremlin.Query("g.V(src).as('src').V(dst).addE(type).from('src')").Bindings(gremlin.Bind{
+		"src":  l.Source,
+		"dst":  l.Target,
+		"type": l.Type,
+	}).Exec()
 	return err
 }
 
@@ -46,7 +50,7 @@ func (n Node) Create() error {
 		return errors.New("Node has no type, skip.")
 	}
 	encoder := GremlinPropertiesEncoder{
-		stringReplacer: strings.NewReplacer(`"`, `\"`, "\n", `\n`, "\r", ``),
+		stringReplacer: strings.NewReplacer(`"`, `\"`, "\n", `\n`, "\r", ``, `$`, `\$`),
 	}
 	err := encoder.Encode(n.Properties)
 	if err != nil {
