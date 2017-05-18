@@ -28,7 +28,7 @@ type Link struct {
 }
 
 func (l Link) Create() error {
-	_, err := gremlin.Query("g.V().hasLabel(src).as('src').V().hasLabel(dst).addE(type).from('src')").Bindings(gremlin.Bind{"src": l.Source, "dst": l.Target, "type": l.Type}).Exec()
+	_, err := gremlin.Query("g.V(src).as('src').V(dst).addE(type).from('src')").Bindings(gremlin.Bind{"src": l.Source, "dst": l.Target, "type": l.Type}).Exec()
 	return err
 }
 
@@ -38,14 +38,14 @@ type Node struct {
 }
 
 func (n Node) Create() error {
-	encoder := GremlinPropertiesEncoder{}
+	encoder := GremlinPropertiesEncoder{
+		stringReplacer: strings.NewReplacer(`"`, `\"`, "\n", `\n`, "\r", ``),
+	}
 	err := encoder.Encode(n.Properties)
 	if err != nil {
 		return err
 	}
-	// drop node first
-	gremlin.Query("g.V().hasLabel(uuid).drop()").Bindings(gremlin.Bind{"uuid": n.UUID}).Exec()
-	query := fmt.Sprintf("g.addV(\"%s\")%s", n.UUID, encoder.String())
+	query := fmt.Sprintf("g.addV(id, \"%s\")%s", n.UUID, encoder.String())
 	_, err = gremlin.Query(query).Exec()
 	return err
 }
@@ -108,16 +108,16 @@ func load(gremlinCluster []string, cassandraCluster []string) {
 	defer session.Close()
 	log.Notice("Connected.")
 
-	var uuid string
-	var key string
-	var column1 string
-	var valueJSON []byte
-
-	var links []Link
+	var (
+		uuid      string
+		key       string
+		column1   string
+		valueJSON []byte
+		links     []Link
+	)
 
 	uuids := session.Query(`SELECT DISTINCT key FROM obj_uuid_table`).Iter()
 	for uuids.Scan(&uuid) {
-		log.Debugf("Processing %s", uuid)
 		node := Node{UUID: uuid, Properties: map[string]interface{}{}}
 		r := session.Query(`SELECT key, column1, value FROM obj_uuid_table WHERE key=?`, uuid).Iter()
 		for r.Scan(&key, &column1, &valueJSON) {
@@ -138,19 +138,24 @@ func load(gremlinCluster []string, cassandraCluster []string) {
 			}
 		}
 		if err := r.Close(); err != nil {
-			log.Fatal(err)
+			log.Critical(err)
 		}
 		if err := node.Create(); err != nil {
-			log.Fatal(err)
+			log.Criticalf("Failed to create node %v : %s", node, err)
 		} else {
-			log.Debugf("Node %v", node)
+			fmt.Print(`.`)
 		}
 
 	}
 
+	log.Notice("Processing links")
+
 	for _, link := range links {
-		log.Debugf("Create link %v", link)
-		link.Create()
+		if err := link.Create(); err != nil {
+			log.Criticalf("Failed to create link %v : %s", link, err)
+		} else {
+			fmt.Print(`.`)
+		}
 	}
 
 }
@@ -172,6 +177,7 @@ func main() {
 
 type GremlinPropertiesEncoder struct {
 	bytes.Buffer
+	stringReplacer *strings.Replacer
 }
 
 func (p *GremlinPropertiesEncoder) EncodeBool(b bool) error {
@@ -185,7 +191,7 @@ func (p *GremlinPropertiesEncoder) EncodeBool(b bool) error {
 
 func (p *GremlinPropertiesEncoder) EncodeString(s string) error {
 	p.WriteByte('"')
-	p.WriteString(strings.Replace(s, `"`, `\"`, -1))
+	p.WriteString(p.stringReplacer.Replace(s))
 	p.WriteByte('"')
 	return nil
 }
