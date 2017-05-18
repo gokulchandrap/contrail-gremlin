@@ -22,6 +22,8 @@ var format = logging.MustStringFormatter(
 	`%{color}%{time:15:04:05.000} %{shortfunc} ▶ %{level:.4s} %{id:03x}%{color:reset} %{message}`,
 )
 
+const QueryMaxSize = 60000
+
 type Link struct {
 	Source string
 	Target string
@@ -51,27 +53,28 @@ func (n Node) Create() error {
 		return err
 	}
 	encodedProps := encoder.String()
+	query := fmt.Sprintf("g.addV(id, uuid, label, type)%s", encodedProps)
 	// When there is to many properties, add them in multiple passes
-	if len([]byte(encodedProps)) > 70000 {
-		_, err = gremlin.Query(`g.addV(id, uuid, label, type)`).Bindings(gremlin.Bind{
-			"uuid": n.UUID,
-			"type": n.Type,
-		}).Exec()
-		if err != nil {
-			return err
-		}
+	if len([]byte(query)) > QueryMaxSize {
 		props := strings.Split(encodedProps, ".property")
+		queryBase := `g.V(uuid)`
+		query = `g.addV(id, uuid, label, type)`
 		for _, prop := range props[1:] {
-			query := fmt.Sprintf("g.V(uuid).property%s", prop)
-			_, err = gremlin.Query(query).Bindings(gremlin.Bind{
-				"uuid": n.UUID,
-			}).Exec()
-			if err != nil {
-				return err
+			queryTmp := fmt.Sprintf("%s.property%s", query, prop)
+			if len([]byte(queryTmp)) > QueryMaxSize {
+				_, err = gremlin.Query(query).Bindings(gremlin.Bind{
+					"uuid": n.UUID,
+					"type": n.Type,
+				}).Exec()
+				if err != nil {
+					return err
+				}
+				query = fmt.Sprintf("%s.property%s", queryBase, prop)
+			} else {
+				query = queryTmp
 			}
 		}
 	} else {
-		query := fmt.Sprintf("g.addV(id, uuid, label, type)%s", encoder.String())
 		_, err = gremlin.Query(query).Bindings(gremlin.Bind{
 			"uuid": n.UUID,
 			"type": n.Type,
