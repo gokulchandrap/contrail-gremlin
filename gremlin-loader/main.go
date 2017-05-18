@@ -50,9 +50,37 @@ func (n Node) Create() error {
 	if err != nil {
 		return err
 	}
-	query := fmt.Sprintf("g.addV(id, \"%s\", label, \"%s\")%s", n.UUID, n.Type, encoder.String())
-	_, err = gremlin.Query(query).Exec()
-	return err
+	encodedProps := encoder.String()
+	// When there is to many properties, add them in multiple passes
+	if len([]byte(encodedProps)) > 70000 {
+		_, err = gremlin.Query(`g.addV(id, uuid, label, type)`).Bindings(gremlin.Bind{
+			"uuid": n.UUID,
+			"type": n.Type,
+		}).Exec()
+		if err != nil {
+			return err
+		}
+		props := strings.Split(encodedProps, ".property")
+		for _, prop := range props[1:] {
+			query := fmt.Sprintf("g.V(uuid).property%s", prop)
+			_, err = gremlin.Query(query).Bindings(gremlin.Bind{
+				"uuid": n.UUID,
+			}).Exec()
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		query := fmt.Sprintf("g.addV(id, uuid, label, type)%s", encoder.String())
+		_, err = gremlin.Query(query).Bindings(gremlin.Bind{
+			"uuid": n.UUID,
+			"type": n.Type,
+		}).Exec()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (n Node) AddProperties(prefix string, c *gabs.Container) {
@@ -120,6 +148,8 @@ func load(gremlinCluster []string, cassandraCluster []string) {
 		valueJSON []byte
 		links     []Link
 	)
+
+	log.Notice("Processing nodes")
 
 	uuids := session.Query(`SELECT DISTINCT key FROM obj_uuid_table`).Iter()
 	for uuids.Scan(&uuid) {
