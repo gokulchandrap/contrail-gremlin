@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Jeffail/gabs"
 	"github.com/go-gremlin/gremlin"
@@ -144,6 +145,7 @@ func load(gremlinCluster []string, cassandraCluster []string) {
 	cluster := gocql.NewCluster(cassandraCluster...)
 	cluster.Keyspace = "config_db_uuid"
 	cluster.Consistency = gocql.Quorum
+	cluster.Timeout = 1200 * time.Millisecond
 	session, _ := cluster.CreateSession()
 	defer session.Close()
 	log.Notice("Connected.")
@@ -158,8 +160,10 @@ func load(gremlinCluster []string, cassandraCluster []string) {
 
 	log.Notice("Processing nodes")
 
-	uuids := session.Query(`SELECT DISTINCT key FROM obj_uuid_table`).Iter()
+	uuids := session.Query(`SELECT column1 FROM obj_fq_name_table`).Iter()
 	for uuids.Scan(&uuid) {
+		parts := strings.Split(uuid, ":")
+		uuid = parts[len(parts)-1]
 		node := Node{
 			UUID:       uuid,
 			Properties: map[string]interface{}{},
@@ -199,9 +203,12 @@ func load(gremlinCluster []string, cassandraCluster []string) {
 		} else {
 			fmt.Print(`.`)
 		}
-
+	}
+	if err := uuids.Close(); err != nil {
+		log.Critical(err)
 	}
 
+	fmt.Println()
 	log.Notice("Processing links")
 
 	for _, link := range links {
