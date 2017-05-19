@@ -16,19 +16,32 @@ import (
 	"github.com/gocql/gocql"
 	"github.com/jawher/mow.cli"
 	logging "github.com/op/go-logging"
+	"github.com/streadway/amqp"
 )
 
-var log = logging.MustGetLogger("gremlin-loader")
-var format = logging.MustStringFormatter(
-	`%{color}%{time:15:04:05.000} %{shortfunc} ▶ %{level:.4s} %{id:03x}%{color:reset} %{message}`,
+var (
+	log    = logging.MustGetLogger("gremlin-loader")
+	format = logging.MustStringFormatter(
+		`%{color}%{time:15:04:05.000} %{shortfunc} ▶ %{level:.4s} %{id:03x}%{color:reset} %{message}`)
+	session *gocql.Session
 )
 
-const QueryMaxSize = 60000
+const (
+	QueryMaxSize = 60000
+	VncExchange  = "vnc_config.object-update"
+	QueueName    = "gremlin.sync"
+)
+
+type Notification struct {
+	Oper string `json:"oper"`
+	Type string `json:"type"`
+	UUID string `json:"uuid"`
+}
 
 type Link struct {
-	Source string
-	Target string
-	Type   string
+	Source string `json:"outV"`
+	Target string `json:"inV"`
+	Type   string `json:"label"`
 }
 
 func (l Link) Create() error {
@@ -46,33 +59,31 @@ type Node struct {
 	Properties map[string]interface{}
 }
 
-func (n Node) Create() error {
+func (n Node) createUpdateQuery(base string) (error, []string) {
+	var queries []string
 	if n.Type == "" {
-		return errors.New("Node has no type, skip.")
+		return errors.New("Node has no type, skip."), nil
 	}
 	encoder := GremlinPropertiesEncoder{
 		stringReplacer: strings.NewReplacer(`"`, `\"`, "\n", `\n`, "\r", ``, `$`, `\$`),
 	}
 	err := encoder.Encode(n.Properties)
 	if err != nil {
-		return err
+		return err, nil
 	}
 	encodedProps := encoder.String()
-	query := fmt.Sprintf("g.addV(id, uuid, label, type)%s", encodedProps)
+	query := fmt.Sprintf("%s%s", base, encodedProps)
 	// When there is to many properties, add them in multiple passes
 	if len([]byte(query)) > QueryMaxSize {
 		props := strings.Split(encodedProps, ".property")
 		queryBase := `g.V(uuid)`
-		query = `g.addV(id, uuid, label, type)`
+		query = base
 		for _, prop := range props[1:] {
 			queryTmp := fmt.Sprintf("%s.property%s", query, prop)
 			if len([]byte(queryTmp)) > QueryMaxSize {
-				_, err = gremlin.Query(query).Bindings(gremlin.Bind{
-					"uuid": n.UUID,
-					"type": n.Type,
-				}).Exec()
+				queries = append(queries, query)
 				if err != nil {
-					return err
+					return err, nil
 				}
 				query = fmt.Sprintf("%s.property%s", queryBase, prop)
 			} else {
@@ -80,6 +91,17 @@ func (n Node) Create() error {
 			}
 		}
 	} else {
+		queries = append(queries, query)
+	}
+	return nil, queries
+}
+
+func (n Node) Create() error {
+	err, queries := n.createUpdateQuery(`g.addV(id, uuid, label, type)`)
+	if err != nil {
+		return err
+	}
+	for _, query := range queries {
 		_, err = gremlin.Query(query).Bindings(gremlin.Bind{
 			"uuid": n.UUID,
 			"type": n.Type,
@@ -87,6 +109,40 @@ func (n Node) Create() error {
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (n Node) Update() error {
+	err, queries := n.createUpdateQuery(`g.V(uuid)`)
+	if err != nil {
+		return err
+	}
+	_, err = gremlin.Query(`g.V(uuid).properties().drop()`).Bindings(gremlin.Bind{
+		"uuid": n.UUID,
+		"type": n.Type,
+	}).Exec()
+	if err != nil {
+		return err
+	}
+	for _, query := range queries {
+		_, err := gremlin.Query(query).Bindings(gremlin.Bind{
+			"uuid": n.UUID,
+			"type": n.Type,
+		}).Exec()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (n Node) Delete() error {
+	_, err := gremlin.Query(`g.V(uuid).drop()`).Bindings(gremlin.Bind{
+		"uuid": n.UUID,
+	}).Exec()
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -129,82 +185,223 @@ func (n Node) AddProperty(prefix string, value interface{}) {
 	}
 }
 
-func load(gremlinCluster []string, cassandraCluster []string) {
+func (n Node) Links() (error, []Link) {
+	data, err := gremlin.Query(`g.V(uuid).bothE()`).Bindings(gremlin.Bind{
+		"uuid": n.UUID,
+	}).Exec()
+	if err != nil {
+		return err, nil
+	}
+	var links []Link
+	json.Unmarshal(data, &links)
+	return nil, links
+}
 
-	backend := logging.NewLogBackend(os.Stderr, "", 0)
-	backendFormatter := logging.NewBackendFormatter(backend, format)
-	logging.SetBackend(backendFormatter)
+func setupRabbit(rabbitURI string, rabbitVHost string) (*amqp.Connection, *amqp.Channel, <-chan amqp.Delivery) {
+	log.Notice("Connecting to RabbitMQ...")
 
+	conn, err := amqp.DialConfig(rabbitURI, amqp.Config{Vhost: rabbitVHost})
+	if err != nil {
+		log.Fatalf("Failed to connect: %s", err)
+	}
+
+	ch, err := conn.Channel()
+	if err != nil {
+		log.Fatalf("Failed to open channel: %s", err)
+	}
+
+	q, err := ch.QueueDeclare(
+		QueueName, // name
+		false,     // durable
+		false,     // delete when unused
+		false,     // exclusive
+		false,     // no-wait
+		nil,       // arguments
+	)
+	if err != nil {
+		log.Fatalf("Failed to create queue: %s", err)
+	}
+
+	err = ch.QueueBind(
+		q.Name,      // queue name
+		"",          // routing key
+		VncExchange, // exchange
+		false,
+		nil,
+	)
+	if err != nil {
+		log.Fatalf("Failed to bind queue: %s", err)
+	}
+
+	msgs, err := ch.Consume(
+		q.Name, // queue
+		"",     // consumer
+		true,   // auto-ack
+		true,   // exclusive
+		false,  // no-local
+		false,  // no-wait
+		nil,    // args
+	)
+	if err != nil {
+		log.Fatalf("Failed to register consumer: %s", err)
+	}
+
+	log.Notice("Connected.")
+
+	return conn, ch, msgs
+}
+
+func sync(session *gocql.Session, msgs <-chan amqp.Delivery) {
+	for d := range msgs {
+		n := Notification{}
+		json.Unmarshal(d.Body, &n)
+		switch n.Oper {
+		case "CREATE":
+			node, links := getNode(session, n.UUID)
+			node.Create()
+			for _, link := range links {
+				link.Create()
+			}
+			log.Debugf("%s/%s created", n.Type, n.UUID)
+		case "UPDATE":
+			node, newLinks := getNode(session, n.UUID)
+			node.Update()
+			_, currentLinks := node.Links()
+			// TODO: update links
+			log.Critical(currentLinks)
+			log.Critical(newLinks)
+			log.Debugf("%s/%s updated", n.Type, n.UUID)
+		case "DELETE":
+			node := Node{UUID: n.UUID, Type: n.Type}
+			node.Delete()
+			log.Debugf("%s/%s deleted", n.Type, n.UUID)
+		}
+	}
+	log.Critical("Finish consuming")
+}
+
+func setupGremlin(gremlinCluster []string) {
 	if err := gremlin.NewCluster(gremlinCluster...); err != nil {
 		log.Fatal("Failed to connect to gremlin server.")
 	} else {
 		log.Notice("Connected to Gremlin server.")
 	}
+}
 
+func setupCassandra(cassandraCluster []string) *gocql.Session {
 	log.Notice("Connecting to Cassandra...")
 	cluster := gocql.NewCluster(cassandraCluster...)
 	cluster.Keyspace = "config_db_uuid"
 	cluster.Consistency = gocql.Quorum
 	cluster.Timeout = 1200 * time.Millisecond
 	session, _ := cluster.CreateSession()
-	defer session.Close()
 	log.Notice("Connected.")
+	return session
+
+}
+
+func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string, rabbitVHost string, noLoad bool, noSync bool) {
 
 	var (
-		uuid      string
+		conn    *amqp.Connection
+		msgs    <-chan amqp.Delivery
+		session *gocql.Session
+	)
+
+	backend := logging.NewLogBackend(os.Stderr, "", 0)
+	backendFormatter := logging.NewBackendFormatter(backend, format)
+	logging.SetBackend(backendFormatter)
+
+	setupGremlin(gremlinCluster)
+
+	session = setupCassandra(cassandraCluster)
+	defer session.Close()
+
+	if noSync == false {
+		conn, _, msgs = setupRabbit(rabbitURI, rabbitVHost)
+		defer conn.Close()
+	}
+
+	if noLoad == false {
+		load(session)
+	}
+
+	if noSync == false {
+		go sync(session, msgs)
+		log.Notice("Listening for updates. To exit press CTRL+C")
+		forever := make(chan bool)
+		<-forever
+	}
+}
+
+func getNode(session *gocql.Session, uuid string) (Node, []Link) {
+	var (
 		key       string
 		column1   string
 		valueJSON []byte
 		links     []Link
 	)
+	node := Node{
+		UUID:       uuid,
+		Properties: map[string]interface{}{},
+	}
+	r := session.Query(`SELECT key, column1, value FROM obj_uuid_table WHERE key=?`, uuid).Iter()
+	for r.Scan(&key, &column1, &valueJSON) {
+		split := strings.Split(column1, ":")
+		switch split[0] {
+		case "ref":
+			links = append(links, Link{Source: uuid, Target: split[2], Type: split[0]})
+		case "parent":
+			links = append(links, Link{Source: split[2], Target: uuid, Type: split[0]})
+		case "type":
+			var value string
+			json.Unmarshal(valueJSON, &value)
+			node.Type = value
+		case "fq_name":
+			var value []string
+			json.Unmarshal(valueJSON, &value)
+			for _, c := range value {
+				node.AddProperty("fq_name", c)
+			}
+		case "prop":
+			value, err := gabs.ParseJSON(valueJSON)
+			if err != nil {
+				log.Fatalf("Failed to parse %v", string(valueJSON))
+			}
+			node.AddProperties(split[1], value)
+		}
+	}
+	if err := r.Close(); err != nil {
+		log.Critical(err)
+	}
+
+	return node, links
+}
+
+func load(session *gocql.Session) {
+	var (
+		uuid  string
+		links []Link
+	)
 
 	log.Notice("Processing nodes")
 
-	uuids := session.Query(`SELECT column1 FROM obj_fq_name_table`).Iter()
-	for uuids.Scan(&uuid) {
+	r := session.Query(`SELECT column1 FROM obj_fq_name_table`).Iter()
+	for r.Scan(&uuid) {
 		parts := strings.Split(uuid, ":")
 		uuid = parts[len(parts)-1]
-		node := Node{
-			UUID:       uuid,
-			Properties: map[string]interface{}{},
-		}
-		r := session.Query(`SELECT key, column1, value FROM obj_uuid_table WHERE key=?`, uuid).Iter()
-		for r.Scan(&key, &column1, &valueJSON) {
-			split := strings.Split(column1, ":")
-			switch split[0] {
-			case "ref":
-				links = append(links, Link{Source: uuid, Target: split[2], Type: split[0]})
-			case "parent":
-				links = append(links, Link{Source: split[2], Target: uuid, Type: split[0]})
-			case "type":
-				var value string
-				json.Unmarshal(valueJSON, &value)
-				node.Type = value
-			case "fq_name":
-				var value []string
-				json.Unmarshal(valueJSON, &value)
-				for _, c := range value {
-					node.AddProperty("fq_name", c)
-				}
-			case "prop":
-				value, err := gabs.ParseJSON(valueJSON)
-				if err != nil {
-					log.Fatalf("Failed to parse %v", string(valueJSON))
-				}
-				node.AddProperties(split[1], value)
-			}
-		}
-		if err := r.Close(); err != nil {
-			log.Critical(err)
-		}
+		node, nodeLinks := getNode(session, uuid)
 		if err := node.Create(); err != nil {
 			fmt.Println()
 			log.Criticalf("Failed to create node %v : %s", node, err)
 		} else {
 			fmt.Print(`.`)
 		}
+		for _, link := range nodeLinks {
+			links = append(links, link)
+		}
 	}
-	if err := uuids.Close(); err != nil {
+	if err := r.Close(); err != nil {
 		log.Critical(err)
 	}
 
@@ -219,19 +416,28 @@ func load(gremlinCluster []string, cassandraCluster []string) {
 		}
 	}
 
+	fmt.Println()
+
 }
 
 func main() {
-	app := cli.App("gremlin-loader", "Load contrail DB in gremlin server")
+	app := cli.App("gremlin-loader", "Load and Sync Contrail DB in Gremlin Server")
 	gremlinSrvs := app.StringsOpt("gremlin", []string{"localhost:8182"}, "host:port of gremlin server nodes")
 	cassandraSrvs := app.StringsOpt("cassandra", []string{"localhost"}, "list of host of cassandra nodes, uses CQL port 9042")
+	rabbitSrv := app.StringOpt("rabbit", "localhost:5276", "host:port of rabbitmq server")
+	rabbitVHost := app.StringOpt("rabbit-vhost", "opencontrail", "vhost of rabbitmq server")
+	rabbitUser := app.StringOpt("rabbit-user", "opencontrail", "user for rabbitmq server")
+	rabbitPassword := app.StringOpt("rabbit-password", "", "password for rabbitmq server")
+	noLoad := app.BoolOpt("no-load", false, "Don't load cassandra DB")
+	noSync := app.BoolOpt("no-sync", false, "Don't sync with RabbitMQ")
 	app.Action = func() {
 		var gremlinCluster = make([]string, len(*gremlinSrvs))
 		for i, srv := range *gremlinSrvs {
 			gremlinCluster[i] = fmt.Sprintf("ws://%s/gremlin", srv)
 
 		}
-		load(gremlinCluster, *cassandraSrvs)
+		rabbitURI := fmt.Sprintf("amqp://%s:%s@%s/", *rabbitUser, *rabbitPassword, *rabbitSrv)
+		setup(gremlinCluster, *cassandraSrvs, rabbitURI, *rabbitVHost, *noLoad, *noSync)
 	}
 	app.Run(os.Args)
 }
