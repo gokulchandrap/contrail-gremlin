@@ -168,12 +168,10 @@ func load(gremlinCluster []string, cassandraCluster []string) {
 		for r.Scan(&key, &column1, &valueJSON) {
 			split := strings.Split(column1, ":")
 			switch split[0] {
-			case
-				"ref",
-				"back_ref",
-				"children",
-				"parent":
+			case "ref":
 				links = append(links, Link{Source: uuid, Target: split[2], Type: split[0]})
+			case "parent":
+				links = append(links, Link{Source: split[2], Target: uuid, Type: split[0]})
 			case "type":
 				var value string
 				json.Unmarshal(valueJSON, &value)
