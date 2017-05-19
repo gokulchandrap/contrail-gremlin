@@ -3,8 +3,11 @@ Run gremlin server
 
     wget http://www-eu.apache.org/dist/tinkerpop/3.2.4/apache-tinkerpop-gremlin-server-3.2.4-bin.zip
     unzip apache-tinkerpop-gremlin-server-3.2.4-bin.zip
+    cp <REPO_ROOT>/conf/* apache-tinkerpop-gremlin-server-3.2.4/conf
     cd apache-tinkerpop-gremlin-server-3.2.4
-    bin/gremlin-server.sh conf/gremlin-server-modern.yaml
+    # for large DBs tune Xmx and Xms
+    export JAVA_OPTIONS="-Xmx2048m -Xms512m"
+    bin/gremlin-server.sh conf/gremlin-server-contrail.yaml
 
 Run loader
 ==========
