@@ -45,11 +45,23 @@ type Link struct {
 }
 
 func (l Link) Create() error {
-	_, err := gremlin.Query("g.V(src).as('src').V(dst).addE(type).from('src')").Bindings(gremlin.Bind{
-		"src":  l.Source,
-		"dst":  l.Target,
-		"type": l.Type,
-	}).Exec()
+	_, err := gremlin.Query("g.V(src).as('src').V(dst).addE(type).from('src')").Bindings(
+		gremlin.Bind{
+			"src":  l.Source,
+			"dst":  l.Target,
+			"type": l.Type,
+		}).Exec()
+	log.Debugf("add link %s -> %s", l.Source, l.Target)
+	return err
+}
+
+func (l Link) Delete() error {
+	_, err := gremlin.Query("g.V(src).bothE().where(otherV().hasId(dst)).drop()").Bindings(
+		gremlin.Bind{
+			"src": l.Source,
+			"dst": l.Target,
+		}).Exec()
+	log.Debugf("remove link %s -> %s", l.Source, l.Target)
 	return err
 }
 
@@ -150,15 +162,33 @@ func (n Node) Update() error {
 
 // CurrentLinks returns the Links of the Node in its current state
 func (n Node) CurrentLinks() ([]Link, error) {
-	data, err := gremlin.Query(`g.V(uuid).bothE()`).Bindings(gremlin.Bind{
+	// TODO: get links in one query
+	var (
+		links    []Link
+		allLinks []Link
+	)
+	data1, err := gremlin.Query(`g.V(uuid).outE('ref')`).Bindings(gremlin.Bind{
 		"uuid": n.UUID,
 	}).Exec()
 	if err != nil {
 		return nil, err
 	}
-	var links []Link
-	json.Unmarshal(data, &links)
-	return links, err
+	json.Unmarshal(data1, &links)
+	for _, link := range links {
+		allLinks = append(allLinks, link)
+	}
+	data2, err := gremlin.Query(`g.V(uuid).inE('parent')`).Bindings(gremlin.Bind{
+		"uuid": n.UUID,
+	}).Exec()
+	if err != nil {
+		return nil, err
+	}
+	json.Unmarshal(data2, &links)
+	for _, link := range links {
+		allLinks = append(allLinks, link)
+	}
+
+	return allLinks, err
 }
 
 // UpdateLinks check the current Node links in gremlin server
@@ -202,6 +232,13 @@ func (n Node) UpdateLinks() error {
 
 	for _, link := range toAdd {
 		err = link.Create()
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, link := range toRemove {
+		err = link.Delete()
 		if err != nil {
 			return err
 		}
