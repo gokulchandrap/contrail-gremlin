@@ -57,19 +57,20 @@ type Node struct {
 	UUID       string
 	Type       string
 	Properties map[string]interface{}
+	Links      []Link
 }
 
-func (n Node) createUpdateQuery(base string) (error, []string) {
+func (n Node) createUpdateQuery(base string) ([]string, error) {
 	var queries []string
 	if n.Type == "" {
-		return errors.New("Node has no type, skip."), nil
+		return nil, errors.New("Node has no type, skip.")
 	}
 	encoder := GremlinPropertiesEncoder{
 		stringReplacer: strings.NewReplacer(`"`, `\"`, "\n", `\n`, "\r", ``, `$`, `\$`),
 	}
 	err := encoder.Encode(n.Properties)
 	if err != nil {
-		return err, nil
+		return nil, err
 	}
 	encodedProps := encoder.String()
 	query := fmt.Sprintf("%s%s", base, encodedProps)
@@ -83,7 +84,7 @@ func (n Node) createUpdateQuery(base string) (error, []string) {
 			if len([]byte(queryTmp)) > QueryMaxSize {
 				queries = append(queries, query)
 				if err != nil {
-					return err, nil
+					return nil, err
 				}
 				query = fmt.Sprintf("%s.property%s", queryBase, prop)
 			} else {
@@ -93,11 +94,11 @@ func (n Node) createUpdateQuery(base string) (error, []string) {
 	} else {
 		queries = append(queries, query)
 	}
-	return nil, queries
+	return queries, nil
 }
 
 func (n Node) Create() error {
-	err, queries := n.createUpdateQuery(`g.addV(id, uuid, label, type)`)
+	queries, err := n.createUpdateQuery(`g.addV(id, uuid, label, type)`)
 	if err != nil {
 		return err
 	}
@@ -113,8 +114,18 @@ func (n Node) Create() error {
 	return nil
 }
 
+func (n Node) CreateLinks() error {
+	for _, link := range n.Links {
+		err := link.Create()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (n Node) Update() error {
-	err, queries := n.createUpdateQuery(`g.V(uuid)`)
+	queries, err := n.createUpdateQuery(`g.V(uuid)`)
 	if err != nil {
 		return err
 	}
@@ -134,6 +145,68 @@ func (n Node) Update() error {
 			return err
 		}
 	}
+	return nil
+}
+
+// CurrentLinks returns the Links of the Node in its current state
+func (n Node) CurrentLinks() ([]Link, error) {
+	data, err := gremlin.Query(`g.V(uuid).bothE()`).Bindings(gremlin.Bind{
+		"uuid": n.UUID,
+	}).Exec()
+	if err != nil {
+		return nil, err
+	}
+	var links []Link
+	json.Unmarshal(data, &links)
+	return links, err
+}
+
+// UpdateLinks check the current Node links in gremlin server
+// and apply node.Links accordingly
+func (n Node) UpdateLinks() error {
+	currentLinks, err := n.CurrentLinks()
+	if err != nil {
+		return err
+	}
+
+	var (
+		toAdd    []Link
+		toRemove []Link
+	)
+
+	for _, l1 := range n.Links {
+		found := false
+		for _, l2 := range currentLinks {
+			if l1.Source == l2.Source && l1.Target == l2.Target && l1.Type == l2.Type {
+				found = true
+				break
+			}
+		}
+		if !found {
+			toAdd = append(toAdd, l1)
+		}
+	}
+
+	for _, l1 := range currentLinks {
+		found := false
+		for _, l2 := range n.Links {
+			if l1.Source == l2.Source && l1.Target == l2.Target && l1.Type == l2.Type {
+				found = true
+				break
+			}
+		}
+		if !found {
+			toRemove = append(toRemove, l1)
+		}
+	}
+
+	for _, link := range toAdd {
+		err = link.Create()
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -183,18 +256,6 @@ func (n Node) AddProperty(prefix string, value interface{}) {
 	} else {
 		n.Properties[prefix] = []interface{}{value}
 	}
-}
-
-func (n Node) Links() (error, []Link) {
-	data, err := gremlin.Query(`g.V(uuid).bothE()`).Bindings(gremlin.Bind{
-		"uuid": n.UUID,
-	}).Exec()
-	if err != nil {
-		return err, nil
-	}
-	var links []Link
-	json.Unmarshal(data, &links)
-	return nil, links
 }
 
 func setupRabbit(rabbitURI string, rabbitVHost string) (*amqp.Connection, *amqp.Channel, <-chan amqp.Delivery) {
@@ -257,19 +318,14 @@ func sync(session *gocql.Session, msgs <-chan amqp.Delivery) {
 		json.Unmarshal(d.Body, &n)
 		switch n.Oper {
 		case "CREATE":
-			node, links := getNode(session, n.UUID)
+			node := getNode(session, n.UUID)
 			node.Create()
-			for _, link := range links {
-				link.Create()
-			}
+			node.CreateLinks()
 			log.Debugf("%s/%s created", n.Type, n.UUID)
 		case "UPDATE":
-			node, newLinks := getNode(session, n.UUID)
+			node := getNode(session, n.UUID)
 			node.Update()
-			_, currentLinks := node.Links()
-			// TODO: update links
-			log.Critical(currentLinks)
-			log.Critical(newLinks)
+			node.UpdateLinks()
 			log.Debugf("%s/%s updated", n.Type, n.UUID)
 		case "DELETE":
 			node := Node{UUID: n.UUID, Type: n.Type}
@@ -334,12 +390,11 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 	}
 }
 
-func getNode(session *gocql.Session, uuid string) (Node, []Link) {
+func getNode(session *gocql.Session, uuid string) Node {
 	var (
 		key       string
 		column1   string
 		valueJSON []byte
-		links     []Link
 	)
 	node := Node{
 		UUID:       uuid,
@@ -350,9 +405,9 @@ func getNode(session *gocql.Session, uuid string) (Node, []Link) {
 		split := strings.Split(column1, ":")
 		switch split[0] {
 		case "ref":
-			links = append(links, Link{Source: uuid, Target: split[2], Type: split[0]})
+			node.Links = append(node.Links, Link{Source: uuid, Target: split[2], Type: split[0]})
 		case "parent":
-			links = append(links, Link{Source: split[2], Target: uuid, Type: split[0]})
+			node.Links = append(node.Links, Link{Source: split[2], Target: uuid, Type: split[0]})
 		case "type":
 			var value string
 			json.Unmarshal(valueJSON, &value)
@@ -375,7 +430,7 @@ func getNode(session *gocql.Session, uuid string) (Node, []Link) {
 		log.Critical(err)
 	}
 
-	return node, links
+	return node
 }
 
 func load(session *gocql.Session) {
@@ -390,14 +445,14 @@ func load(session *gocql.Session) {
 	for r.Scan(&uuid) {
 		parts := strings.Split(uuid, ":")
 		uuid = parts[len(parts)-1]
-		node, nodeLinks := getNode(session, uuid)
+		node := getNode(session, uuid)
 		if err := node.Create(); err != nil {
 			fmt.Println()
 			log.Criticalf("Failed to create node %v : %s", node, err)
 		} else {
 			fmt.Print(`.`)
 		}
-		for _, link := range nodeLinks {
+		for _, link := range node.Links {
 			links = append(links, link)
 		}
 	}
