@@ -17,6 +17,7 @@ import (
 	"github.com/jawher/mow.cli"
 	logging "github.com/op/go-logging"
 	"github.com/streadway/amqp"
+	"github.com/willfaught/gockle"
 )
 
 var (
@@ -349,7 +350,7 @@ func setupRabbit(rabbitURI string, rabbitVHost string) (*amqp.Connection, *amqp.
 	return conn, ch, msgs
 }
 
-func sync(session *gocql.Session, msgs <-chan amqp.Delivery) {
+func sync(session gockle.Session, msgs <-chan amqp.Delivery) {
 	for d := range msgs {
 		n := Notification{}
 		json.Unmarshal(d.Body, &n)
@@ -386,15 +387,16 @@ func setupGremlin(gremlinCluster []string) {
 	}
 }
 
-func setupCassandra(cassandraCluster []string) *gocql.Session {
+func setupCassandra(cassandraCluster []string) gockle.Session {
 	log.Notice("Connecting to Cassandra...")
 	cluster := gocql.NewCluster(cassandraCluster...)
 	cluster.Keyspace = "config_db_uuid"
 	cluster.Consistency = gocql.Quorum
 	cluster.Timeout = 1200 * time.Millisecond
 	session, _ := cluster.CreateSession()
+	mockableSession := gockle.NewSession(session)
 	log.Notice("Connected.")
-	return session
+	return mockableSession
 
 }
 
@@ -403,7 +405,7 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 	var (
 		conn    *amqp.Connection
 		msgs    <-chan amqp.Delivery
-		session *gocql.Session
+		session gockle.Session
 	)
 
 	backend := logging.NewLogBackend(os.Stderr, "", 0)
@@ -432,9 +434,8 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 	}
 }
 
-func getNode(session *gocql.Session, uuid string) Node {
+func getNode(session gockle.Session, uuid string) Node {
 	var (
-		key       string
 		column1   string
 		valueJSON []byte
 	)
@@ -442,40 +443,43 @@ func getNode(session *gocql.Session, uuid string) Node {
 		UUID:       uuid,
 		Properties: map[string]interface{}{},
 	}
-	r := session.Query(`SELECT key, column1, value FROM obj_uuid_table WHERE key=?`, uuid).Iter()
-	for r.Scan(&key, &column1, &valueJSON) {
-		split := strings.Split(column1, ":")
-		switch split[0] {
-		case "ref":
-			node.Links = append(node.Links, Link{Source: uuid, Target: split[2], Type: split[0]})
-		case "parent":
-			node.Links = append(node.Links, Link{Source: split[2], Target: uuid, Type: split[0]})
-		case "type":
-			var value string
-			json.Unmarshal(valueJSON, &value)
-			node.Type = value
-		case "fq_name":
-			var value []string
-			json.Unmarshal(valueJSON, &value)
-			for _, c := range value {
-				node.AddProperty("fq_name", c)
-			}
-		case "prop":
-			value, err := gabs.ParseJSON(valueJSON)
-			if err != nil {
-				log.Fatalf("Failed to parse %v", string(valueJSON))
-			}
-			node.AddProperties(split[1], value)
-		}
-	}
-	if err := r.Close(); err != nil {
+	rows, err := session.ScanMapSlice(`SELECT key, column1, value FROM obj_uuid_table WHERE key=?`, uuid)
+	if err != nil {
 		log.Critical(err)
+	} else {
+		for _, row := range rows {
+			column1 = string(row["column1"].([]byte))
+			valueJSON = []byte(row["value"].(string))
+			split := strings.Split(column1, ":")
+			switch split[0] {
+			case "ref":
+				node.Links = append(node.Links, Link{Source: uuid, Target: split[2], Type: split[0]})
+			case "parent":
+				node.Links = append(node.Links, Link{Source: split[2], Target: uuid, Type: split[0]})
+			case "type":
+				var value string
+				json.Unmarshal(valueJSON, &value)
+				node.Type = value
+			case "fq_name":
+				var value []string
+				json.Unmarshal(valueJSON, &value)
+				for _, c := range value {
+					node.AddProperty("fq_name", c)
+				}
+			case "prop":
+				value, err := gabs.ParseJSON(valueJSON)
+				if err != nil {
+					log.Fatalf("Failed to parse %v", string(valueJSON))
+				}
+				node.AddProperties(split[1], value)
+			}
+		}
 	}
 
 	return node
 }
 
-func load(session *gocql.Session) {
+func load(session gockle.Session) {
 	var (
 		uuid  string
 		links []Link
@@ -483,7 +487,7 @@ func load(session *gocql.Session) {
 
 	log.Notice("Processing nodes")
 
-	r := session.Query(`SELECT column1 FROM obj_fq_name_table`).Iter()
+	r := session.ScanIterator(`SELECT column1 FROM obj_fq_name_table`)
 	for r.Scan(&uuid) {
 		parts := strings.Split(uuid, ":")
 		uuid = parts[len(parts)-1]
