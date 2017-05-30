@@ -335,7 +335,7 @@ func setupRabbit(rabbitURI string, rabbitVHost string) (*amqp.Connection, *amqp.
 		q.Name, // queue
 		"",     // consumer
 		false,  // auto-ack
-		true,   // exclusive
+		false,  // exclusive
 		false,  // no-local
 		false,  // no-wait
 		nil,    // args
