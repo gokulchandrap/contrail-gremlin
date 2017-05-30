@@ -334,7 +334,7 @@ func setupRabbit(rabbitURI string, rabbitVHost string) (*amqp.Connection, *amqp.
 	msgs, err := ch.Consume(
 		q.Name, // queue
 		"",     // consumer
-		true,   // auto-ack
+		false,  // auto-ack
 		true,   // exclusive
 		false,  // no-local
 		false,  // no-wait
@@ -359,15 +359,20 @@ func sync(session *gocql.Session, msgs <-chan amqp.Delivery) {
 			node.Create()
 			node.CreateLinks()
 			log.Debugf("%s/%s created", n.Type, n.UUID)
+			d.Ack(false)
 		case "UPDATE":
 			node := getNode(session, n.UUID)
 			node.Update()
 			node.UpdateLinks()
 			log.Debugf("%s/%s updated", n.Type, n.UUID)
+			d.Ack(false)
 		case "DELETE":
 			node := Node{UUID: n.UUID, Type: n.Type}
 			node.Delete()
 			log.Debugf("%s/%s deleted", n.Type, n.UUID)
+			d.Ack(false)
+		default:
+			log.Errorf("Notification not handled: %s", n)
 		}
 	}
 	log.Critical("Finish consuming")
