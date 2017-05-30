@@ -311,7 +311,7 @@ func setupRabbit(rabbitURI string, rabbitVHost string) (*amqp.Connection, *amqp.
 	q, err := ch.QueueDeclare(
 		QueueName, // name
 		false,     // durable
-		false,     // delete when unused
+		true,      // delete when unused
 		false,     // exclusive
 		false,     // no-wait
 		nil,       // arguments
