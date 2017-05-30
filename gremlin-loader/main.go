@@ -311,10 +311,10 @@ func setupRabbit(rabbitURI string, rabbitVHost string) (*amqp.Connection, *amqp.
 	q, err := ch.QueueDeclare(
 		QueueName, // name
 		false,     // durable
-		true,      // delete when unused
+		false,     // delete when unused
 		false,     // exclusive
 		false,     // no-wait
-		nil,       // arguments
+		amqp.Table{"x-expires": int32(180000)}, // arguments
 	)
 	if err != nil {
 		log.Fatalf("Failed to create queue: %s", err)
