@@ -374,6 +374,7 @@ func sync(session gockle.Session, msgs <-chan amqp.Delivery) {
 			d.Ack(false)
 		default:
 			log.Errorf("Notification not handled: %s", n)
+			d.Nack(false, false)
 		}
 	}
 	log.Critical("Finish consuming")
