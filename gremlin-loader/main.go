@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Jeffail/gabs"
@@ -31,6 +32,8 @@ const (
 	QueryMaxSize = 60000
 	VncExchange  = "vnc_config.object-update"
 	QueueName    = "gremlin.sync"
+	NodesWorkers = 10
+	LinksWorkers = 10
 )
 
 type Notification struct {
@@ -52,7 +55,6 @@ func (l Link) Create() error {
 			"dst":  l.Target,
 			"type": l.Type,
 		}).Exec()
-	log.Debugf("add link %s -> %s", l.Source, l.Target)
 	return err
 }
 
@@ -62,7 +64,6 @@ func (l Link) Delete() error {
 			"src": l.Source,
 			"dst": l.Target,
 		}).Exec()
-	log.Debugf("remove link %s -> %s", l.Source, l.Target)
 	return err
 }
 
@@ -350,7 +351,7 @@ func setupRabbit(rabbitURI string, rabbitVHost string) (*amqp.Connection, *amqp.
 	return conn, ch, msgs
 }
 
-func sync(session gockle.Session, msgs <-chan amqp.Delivery) {
+func synchronize(session gockle.Session, msgs <-chan amqp.Delivery) {
 	for d := range msgs {
 		n := Notification{}
 		json.Unmarshal(d.Body, &n)
@@ -398,11 +399,9 @@ func setupCassandra(cassandraCluster []string) gockle.Session {
 	mockableSession := gockle.NewSession(session)
 	log.Notice("Connected.")
 	return mockableSession
-
 }
 
 func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string, rabbitVHost string, noLoad bool, noSync bool) {
-
 	var (
 		conn    *amqp.Connection
 		msgs    <-chan amqp.Delivery
@@ -428,7 +427,7 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 	}
 
 	if noSync == false {
-		go sync(session, msgs)
+		go synchronize(session, msgs)
 		log.Notice("Listening for updates. To exit press CTRL+C")
 		forever := make(chan bool)
 		<-forever
@@ -480,18 +479,9 @@ func getNode(session gockle.Session, uuid string) Node {
 	return node
 }
 
-func load(session gockle.Session) {
-	var (
-		uuid  string
-		links []Link
-	)
-
-	log.Notice("Processing nodes")
-
-	r := session.ScanIterator(`SELECT column1 FROM obj_fq_name_table`)
-	for r.Scan(&uuid) {
-		parts := strings.Split(uuid, ":")
-		uuid = parts[len(parts)-1]
+func loadNodes(uuids <-chan string, links chan<- []Link, session gockle.Session, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for uuid := range uuids {
 		node := getNode(session, uuid)
 		if err := node.Create(); err != nil {
 			fmt.Println()
@@ -499,27 +489,69 @@ func load(session gockle.Session) {
 		} else {
 			fmt.Print(`.`)
 		}
-		for _, link := range node.Links {
-			links = append(links, link)
+		links <- node.Links
+	}
+}
+
+func loadLinks(links <-chan []Link, session gockle.Session, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for nodeLinks := range links {
+		for _, link := range nodeLinks {
+			if err := link.Create(); err != nil {
+				log.Criticalf("Failed to create link %v : %s", link, err)
+			} else {
+				fmt.Print(`.`)
+			}
 		}
+	}
+}
+
+func load(session gockle.Session) {
+	var (
+		uuid    string
+		wgNodes sync.WaitGroup
+		wgLinks sync.WaitGroup
+	)
+
+	count := make(map[string]interface{})
+	err := session.ScanMap(`SELECT count(*) FROM obj_fq_name_table`, count)
+	if err != nil {
+		log.Fatalf("Failed query: %s", err)
+	}
+
+	log.Noticef("Processing %d nodes", count["count"].(int64))
+
+	uuids := make(chan string)
+	links := make(chan []Link, count["count"].(int64))
+
+	for w := 1; w <= NodesWorkers; w++ {
+		wgNodes.Add(1)
+		go loadNodes(uuids, links, session, &wgNodes)
+	}
+
+	r := session.ScanIterator(`SELECT column1 FROM obj_fq_name_table`)
+	for r.Scan(&uuid) {
+		parts := strings.Split(uuid, ":")
+		uuid = parts[len(parts)-1]
+		uuids <- uuid
 	}
 	if err := r.Close(); err != nil {
 		log.Critical(err)
 	}
+	close(uuids)
 
+	wgNodes.Wait()
+	close(links)
 	fmt.Println()
-	log.Notice("Processing links")
 
-	for _, link := range links {
-		if err := link.Create(); err != nil {
-			log.Criticalf("Failed to create link %v : %s", link, err)
-		} else {
-			fmt.Print(`.`)
-		}
+	log.Notice("Processing links")
+	for w := 1; w <= LinksWorkers; w++ {
+		wgLinks.Add(1)
+		go loadLinks(links, session, &wgLinks)
 	}
 
+	wgLinks.Wait()
 	fmt.Println()
-
 }
 
 func main() {
