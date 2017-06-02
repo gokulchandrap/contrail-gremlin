@@ -389,16 +389,19 @@ func setupGremlin(gremlinCluster []string) {
 	}
 }
 
-func setupCassandra(cassandraCluster []string) gockle.Session {
+func setupCassandra(cassandraCluster []string) (gockle.Session, error) {
 	log.Notice("Connecting to Cassandra...")
 	cluster := gocql.NewCluster(cassandraCluster...)
 	cluster.Keyspace = "config_db_uuid"
 	cluster.Consistency = gocql.Quorum
 	cluster.Timeout = 1200 * time.Millisecond
-	session, _ := cluster.CreateSession()
+	session, err := cluster.CreateSession()
+	if err != nil {
+		return nil, err
+	}
 	mockableSession := gockle.NewSession(session)
 	log.Notice("Connected.")
-	return mockableSession
+	return mockableSession, err
 }
 
 func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string, rabbitVHost string, noLoad bool, noSync bool) {
@@ -406,6 +409,7 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 		conn    *amqp.Connection
 		msgs    <-chan amqp.Delivery
 		session gockle.Session
+		err     error
 	)
 
 	backend := logging.NewLogBackend(os.Stderr, "", 0)
@@ -414,7 +418,10 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 
 	setupGremlin(gremlinCluster)
 
-	session = setupCassandra(cassandraCluster)
+	session, err = setupCassandra(cassandraCluster)
+	if err != nil {
+		log.Fatalf("Failed to connect to Cassandra: %s", err)
+	}
 	defer session.Close()
 
 	if noSync == false {
