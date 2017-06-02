@@ -29,7 +29,7 @@ var (
 )
 
 const (
-	QueryMaxSize = 60000
+	QueryMaxSize = 40000
 	VncExchange  = "vnc_config.object-update"
 	QueueName    = "gremlin.sync"
 	NodesWorkers = 10
