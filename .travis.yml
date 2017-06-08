@@ -1,6 +1,13 @@
 dist: trusty
 
-before_install: cd gremlin-sync
+before_install:
+    - sudo apt-get install wget unzip
+    - wget http://www-eu.apache.org/dist/tinkerpop/3.2.4/apache-tinkerpop-gremlin-server-3.2.4-bin.zip
+    - unzip apache-tinkerpop-gremlin-server-3.2.4-bin.zip
+    - cp conf/* apache-tinkerpop-gremlin-server-3.2.4/conf
+    - cd apache-tinkerpop-gremlin-server-3.2.4
+    - bin/gremlin-server.sh conf/gremlin-server-contrail.yaml &
+    - cd ../gremlin-sync
 
 language: go
 go:
