@@ -1,3 +1,5 @@
+Tool to load and sync Contrail DB in gremlin server.
+
 Run gremlin server
 ==================
 
@@ -9,21 +11,18 @@ Run gremlin server
     export JAVA_OPTIONS="-Xmx2048m -Xms512m"
     bin/gremlin-server.sh conf/gremlin-server-contrail.yaml
 
-Run loader
-==========
+Run gremlin-sync
+========
 
-From this repo root
+Build (you need golang 1.7)
 
-    cd gremlin-loader
+    cd gremlin-sync
+    go get ./...
     go build
 
-Setup tunnel to Contrail DB
+Load and sync Contrail DB in gremlin server
 
-    ssh d-cascld-1000.adm.lab2.aub.cloudwatt.net -L 9042:10.35.2.26:9042
-
-Load Contrail DB in gremlin server
-
-    ./gremlin-loader 
+    ./gremlin-sync --rabbit <server> --rabbit-vhost <vhost> --rabbit-user <user> --rabbit-password <pass> --cassandra <server> --gremlin localhost:8182
 
 Connect to server with Gremlin console
 ======================================
@@ -40,3 +39,4 @@ In the console do
 Then you can query the remote graph with ':>'
 
     :> g.V()
+    :> g.V().hasLabel('virtual_network')
