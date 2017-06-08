@@ -1,0 +1,7 @@
+dist: trusty
+
+before_install: cd gremlin-sync
+
+language: go
+go:
+    - 1.7.x
