@@ -563,14 +563,53 @@ func load(session gockle.Session) {
 
 func main() {
 	app := cli.App("gremlin-loader", "Load and Sync Contrail DB in Gremlin Server")
-	gremlinSrvs := app.StringsOpt("gremlin", []string{"localhost:8182"}, "host:port of gremlin server nodes")
-	cassandraSrvs := app.StringsOpt("cassandra", []string{"localhost"}, "list of host of cassandra nodes, uses CQL port 9042")
-	rabbitSrv := app.StringOpt("rabbit", "localhost:5276", "host:port of rabbitmq server")
-	rabbitVHost := app.StringOpt("rabbit-vhost", "opencontrail", "vhost of rabbitmq server")
-	rabbitUser := app.StringOpt("rabbit-user", "opencontrail", "user for rabbitmq server")
-	rabbitPassword := app.StringOpt("rabbit-password", "", "password for rabbitmq server")
-	noLoad := app.BoolOpt("no-load", false, "Don't load cassandra DB")
-	noSync := app.BoolOpt("no-sync", false, "Don't sync with RabbitMQ")
+	gremlinSrvs := app.Strings(cli.StringsOpt{
+		Name:   "gremlin",
+		Value:  []string{"localhost:8182"},
+		Desc:   "host:port of gremlin server nodes",
+		EnvVar: "GREMLIN_SYNC_GREMLIN_SERVERS",
+	})
+	cassandraSrvs := app.Strings(cli.StringsOpt{
+		Name:   "cassandra",
+		Value:  []string{"localhost"},
+		Desc:   "list of host of cassandra nodes, uses CQL port 9042",
+		EnvVar: "GREMLIN_SYNC_CASSANDRA_SERVERS",
+	})
+	rabbitSrv := app.String(cli.StringOpt{
+		Name:   "rabbit",
+		Value:  "localhost:5276",
+		Desc:   "host:port of rabbitmq server",
+		EnvVar: "GREMLIN_SYNC_RABBIT_SERVER",
+	})
+	rabbitVHost := app.String(cli.StringOpt{
+		Name:   "rabbit-vhost",
+		Value:  "opencontrail",
+		Desc:   "vhost of rabbitmq server",
+		EnvVar: "GREMLIN_SYNC_RABBIT_VHOST",
+	})
+	rabbitUser := app.String(cli.StringOpt{
+		Name:   "rabbit-user",
+		Value:  "opencontrail",
+		Desc:   "user for rabbitmq server",
+		EnvVar: "GREMLIN_SYNC_RABBIT_SERVER",
+	})
+	rabbitPassword := app.String(cli.StringOpt{
+		Name:   "rabbit-password",
+		Desc:   "password for rabbitmq server",
+		EnvVar: "GREMLIN_SYNC_RABBIT_PASSWORD",
+	})
+	noLoad := app.Bool(cli.BoolOpt{
+		Name:   "no-load",
+		Value:  false,
+		Desc:   "Don't load cassandra DB",
+		EnvVar: "GREMLIN_SYNC_NO_LOAD",
+	})
+	noSync := app.Bool(cli.BoolOpt{
+		Name:   "no-sync",
+		Value:  false,
+		Desc:   "Don't sync with RabbitMQ",
+		EnvVar: "GREMLIN_SYNC_NO_SYNC",
+	})
 	app.Action = func() {
 		var gremlinCluster = make([]string, len(*gremlinSrvs))
 		for i, srv := range *gremlinSrvs {
