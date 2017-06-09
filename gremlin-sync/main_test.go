@@ -10,9 +10,11 @@ import (
 	"github.com/willfaught/gockle"
 )
 
+var client gremlin.GremlinClient
+
 func checkNode(t *testing.T, query string, bindings gremlin.Bind) []string {
 	var uuids []string
-	results, err := gremlin.Query(query).Bindings(bindings).Exec()
+	results, err := client.Query(query).Bindings(bindings).Exec()
 	if err != nil {
 		t.Errorf("Failed to run query: %s", query)
 		t.SkipNow()
@@ -23,22 +25,33 @@ func checkNode(t *testing.T, query string, bindings gremlin.Bind) []string {
 
 func TestNodeLink(t *testing.T) {
 	var uuids []string
+	var err error
 
-	setupGremlin([]string{"ws://localhost:8182/gremlin"})
+	client, err = setupGremlin([]string{"ws://localhost:8182/gremlin"})
+	if err != nil {
+		t.Error(err)
+	}
+	err = client.Connect()
+	if err != nil {
+		t.Error(err)
+	}
 
 	vnUUID := uuid.NewV4().String()
 	vn := Node{
-		UUID: vnUUID,
-		Type: "virtual_machine",
+		Client: &client,
+		UUID:   vnUUID,
+		Type:   "virtual_machine",
 	}
 	vn.Create()
 
 	vmiUUID := uuid.NewV4().String()
 	vmi := Node{
-		UUID: vmiUUID,
-		Type: "virtual_machine_interface",
+		Client: &client,
+		UUID:   vmiUUID,
+		Type:   "virtual_machine_interface",
 		Links: []Link{
 			Link{
+				Client: &client,
 				Source: vmiUUID,
 				Target: vnUUID,
 				Type:   "ref",
@@ -55,12 +68,14 @@ func TestNodeLink(t *testing.T) {
 
 	projectUUID := uuid.NewV4().String()
 	project := Node{
-		UUID: projectUUID,
-		Type: "project",
+		Client: &client,
+		UUID:   projectUUID,
+		Type:   "project",
 	}
 	project.Create()
 
 	vmi.Links = append(vmi.Links, Link{
+		Client: &client,
 		Source: projectUUID,
 		Target: vmiUUID,
 		Type:   "parent",
@@ -73,8 +88,16 @@ func TestNodeLink(t *testing.T) {
 }
 
 func TestNodeProperties(t *testing.T) {
+	var err error
 
-	setupGremlin([]string{"ws://localhost:8182/gremlin"})
+	client, err = setupGremlin([]string{"ws://localhost:8182/gremlin"})
+	if err != nil {
+		t.Error(err)
+	}
+	err = client.Connect()
+	if err != nil {
+		t.Error(err)
+	}
 
 	nodeUUID := uuid.NewV4().String()
 	query := "SELECT key, column1, value FROM obj_uuid_table WHERE key=?"
@@ -92,7 +115,7 @@ func TestNodeProperties(t *testing.T) {
 		nil,
 	)
 
-	node := getNode(session, nodeUUID)
+	node := getNode(session, &client, nodeUUID)
 	node.Create()
 
 	var uuids []string
