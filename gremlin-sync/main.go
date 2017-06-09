@@ -591,7 +591,7 @@ func main() {
 		Name:   "rabbit-user",
 		Value:  "opencontrail",
 		Desc:   "user for rabbitmq server",
-		EnvVar: "GREMLIN_SYNC_RABBIT_SERVER",
+		EnvVar: "GREMLIN_SYNC_RABBIT_USER",
 	})
 	rabbitPassword := app.String(cli.StringOpt{
 		Name:   "rabbit-password",
