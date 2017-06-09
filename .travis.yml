@@ -1,13 +1,28 @@
 dist: trusty
 
 before_install:
-    - sudo apt-get install wget unzip
     - wget http://www-eu.apache.org/dist/tinkerpop/3.2.4/apache-tinkerpop-gremlin-server-3.2.4-bin.zip
     - unzip apache-tinkerpop-gremlin-server-3.2.4-bin.zip
     - cp conf/* apache-tinkerpop-gremlin-server-3.2.4/conf
     - cd apache-tinkerpop-gremlin-server-3.2.4
     - bin/gremlin-server.sh conf/gremlin-server-contrail.yaml &
     - cd ../gremlin-sync
+
+script:
+    - go test -v ./...
+    - go build -v
+
+after_success:
+    - echo "Pushing binaries to contrail-gremlin-binaries repo"
+    - export BINARY_NAME=gremlin-sync
+    - export BINARIES_REPO=https://eonpatapon:${GITHUB_TOKEN}@github.com/eonpatapon/contrail-gremlin-binaries
+    - export COMMIT_ID=$(git rev-parse HEAD)
+    - git clone -q ${BINARIES_REPO}
+    - cp ${BINARY_NAME} ./contrail-gremlin-binaries
+    - cd contrail-gremlin-binaries
+    - git add .
+    - git -c user.name='Travis' -c user.email='Travis' commit -m "contrail-gremlin commit ${COMMIT_ID}"
+    - git push -f origin master
 
 language: go
 go:
