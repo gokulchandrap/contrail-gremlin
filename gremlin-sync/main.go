@@ -388,10 +388,16 @@ func synchronize(session gockle.Session, client *gremlin.GremlinClient, msgs <-c
 
 func setupGremlin(gremlinCluster []string) (c gremlin.GremlinClient, err error) {
 	c, err = gremlin.NewGremlinClient(gremlinCluster...)
-	if err != nil {
-		log.Notice("Connected to Gremlin server.")
+	for i := 1; i <= 10; i++ {
+		err = c.Connect()
+		if err != nil {
+			log.Warningf("Failed to connect to Gremlin server, retrying in %ds", i)
+			time.Sleep(time.Duration(i) * time.Second)
+		} else {
+			log.Notice("Connected to Gremlin server.")
+			break
+		}
 	}
-	err = c.Connect()
 	return c, err
 }
 
