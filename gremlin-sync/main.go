@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"reflect"
 	"strconv"
@@ -34,6 +35,7 @@ const (
 	QueueName    = "gremlin.sync"
 	NodesWorkers = 10
 	LinksWorkers = 10
+	SyncFile     = "/tmp/gremlin-synced"
 )
 
 type Notification struct {
@@ -439,7 +441,9 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 	}
 
 	if noLoad == false {
+		os.Remove(SyncFile)
 		load(session, &client)
+		ioutil.WriteFile(SyncFile, []byte(""), 0644)
 	}
 
 	if noSync == false {
