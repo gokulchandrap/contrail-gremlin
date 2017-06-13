@@ -300,7 +300,7 @@ func (n Node) AddProperty(prefix string, value interface{}) {
 	}
 }
 
-func setupRabbit(rabbitURI string, rabbitVHost string) (*amqp.Connection, *amqp.Channel, <-chan amqp.Delivery) {
+func setupRabbit(rabbitURI string, rabbitVHost string, rabbitQueue string) (*amqp.Connection, *amqp.Channel, <-chan amqp.Delivery) {
 	log.Notice("Connecting to RabbitMQ...")
 
 	conn, err := amqp.DialConfig(rabbitURI, amqp.Config{Vhost: rabbitVHost})
@@ -314,11 +314,11 @@ func setupRabbit(rabbitURI string, rabbitVHost string) (*amqp.Connection, *amqp.
 	}
 
 	q, err := ch.QueueDeclare(
-		QueueName, // name
-		false,     // durable
-		false,     // delete when unused
-		false,     // exclusive
-		false,     // no-wait
+		rabbitQueue, // name
+		false,       // durable
+		false,       // delete when unused
+		true,        // exclusive
+		false,       // no-wait
 		amqp.Table{"x-expires": int32(180000)}, // arguments
 	)
 	if err != nil {
@@ -408,7 +408,7 @@ func setupCassandra(cassandraCluster []string) (gockle.Session, error) {
 	return mockableSession, err
 }
 
-func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string, rabbitVHost string, noLoad bool, noSync bool) {
+func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string, rabbitVHost string, rabbitQueue string, noLoad bool, noSync bool) {
 	var (
 		conn    *amqp.Connection
 		msgs    <-chan amqp.Delivery
@@ -434,7 +434,7 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 	defer session.Close()
 
 	if noSync == false {
-		conn, _, msgs = setupRabbit(rabbitURI, rabbitVHost)
+		conn, _, msgs = setupRabbit(rabbitURI, rabbitVHost, rabbitQueue)
 		defer conn.Close()
 	}
 
@@ -618,6 +618,12 @@ func main() {
 		Desc:   "password for rabbitmq server",
 		EnvVar: "GREMLIN_SYNC_RABBIT_PASSWORD",
 	})
+	rabbitQueue := app.String(cli.StringOpt{
+		Name:   "rabbit-queue",
+		Value:  QueueName,
+		Desc:   "name of rabbitmq name",
+		EnvVar: "GREMLIN_SYNC_RABBIT_QUEUE",
+	})
 	noLoad := app.Bool(cli.BoolOpt{
 		Name:   "no-load",
 		Value:  false,
@@ -637,7 +643,7 @@ func main() {
 
 		}
 		rabbitURI := fmt.Sprintf("amqp://%s:%s@%s/", *rabbitUser, *rabbitPassword, *rabbitSrv)
-		setup(gremlinCluster, *cassandraSrvs, rabbitURI, *rabbitVHost, *noLoad, *noSync)
+		setup(gremlinCluster, *cassandraSrvs, rabbitURI, *rabbitVHost, *rabbitQueue, *noLoad, *noSync)
 	}
 	app.Run(os.Args)
 }
