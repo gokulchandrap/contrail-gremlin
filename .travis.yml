@@ -6,14 +6,10 @@ before_install:
     - cp conf/* apache-tinkerpop-gremlin-server-3.2.4/conf
     - cd apache-tinkerpop-gremlin-server-3.2.4
     - bin/gremlin-server.sh conf/gremlin-server-contrail.yaml &
-    - go get github.com/Masterminds/glide
     - cd ../gremlin-sync
 
-install:
-    - glide install
-
 script:
-    - go test -v
+    - go test -v ./...
     - go build -v
 
 after_success:

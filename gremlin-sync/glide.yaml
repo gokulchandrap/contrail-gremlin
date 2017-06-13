@@ -1,6 +1,0 @@
-package: github.com/eonpatapon/contrail-gremlin/gremlin-sync
-import:
-- package: github.com/go-gremlin/gremlin
-  version: client
-  repo: https://github.com/eonpatapon/gremlin.git
-- package: github.com/kr/pty

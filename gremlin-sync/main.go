@@ -45,14 +45,13 @@ type Notification struct {
 }
 
 type Link struct {
-	Client *gremlin.GremlinClient
 	Source string `json:"outV"`
 	Target string `json:"inV"`
 	Type   string `json:"label"`
 }
 
 func (l Link) Create() error {
-	_, err := l.Client.Query("g.V(src).as('src').V(dst).addE(type).from('src')").Bindings(
+	_, err := gremlin.Query("g.V(src).as('src').V(dst).addE(type).from('src')").Bindings(
 		gremlin.Bind{
 			"src":  l.Source,
 			"dst":  l.Target,
@@ -62,7 +61,7 @@ func (l Link) Create() error {
 }
 
 func (l Link) Delete() error {
-	_, err := l.Client.Query("g.V(src).bothE().where(otherV().hasId(dst)).drop()").Bindings(
+	_, err := gremlin.Query("g.V(src).bothE().where(otherV().hasId(dst)).drop()").Bindings(
 		gremlin.Bind{
 			"src": l.Source,
 			"dst": l.Target,
@@ -71,7 +70,6 @@ func (l Link) Delete() error {
 }
 
 type Node struct {
-	Client     *gremlin.GremlinClient
 	UUID       string
 	Type       string
 	Properties map[string]interface{}
@@ -121,7 +119,7 @@ func (n Node) Create() error {
 		return err
 	}
 	for _, query := range queries {
-		_, err = n.Client.Query(query).Bindings(gremlin.Bind{
+		_, err = gremlin.Query(query).Bindings(gremlin.Bind{
 			"uuid": n.UUID,
 			"type": n.Type,
 		}).Exec()
@@ -147,7 +145,7 @@ func (n Node) Update() error {
 	if err != nil {
 		return err
 	}
-	_, err = n.Client.Query(`g.V(uuid).properties().drop()`).Bindings(gremlin.Bind{
+	_, err = gremlin.Query(`g.V(uuid).properties().drop()`).Bindings(gremlin.Bind{
 		"uuid": n.UUID,
 		"type": n.Type,
 	}).Exec()
@@ -155,7 +153,7 @@ func (n Node) Update() error {
 		return err
 	}
 	for _, query := range queries {
-		_, err := n.Client.Query(query).Bindings(gremlin.Bind{
+		_, err := gremlin.Query(query).Bindings(gremlin.Bind{
 			"uuid": n.UUID,
 			"type": n.Type,
 		}).Exec()
@@ -173,7 +171,7 @@ func (n Node) CurrentLinks() ([]Link, error) {
 		links    []Link
 		allLinks []Link
 	)
-	data1, err := n.Client.Query(`g.V(uuid).outE('ref')`).Bindings(gremlin.Bind{
+	data1, err := gremlin.Query(`g.V(uuid).outE('ref')`).Bindings(gremlin.Bind{
 		"uuid": n.UUID,
 	}).Exec()
 	if err != nil {
@@ -183,7 +181,7 @@ func (n Node) CurrentLinks() ([]Link, error) {
 	for _, link := range links {
 		allLinks = append(allLinks, link)
 	}
-	data2, err := n.Client.Query(`g.V(uuid).inE('parent')`).Bindings(gremlin.Bind{
+	data2, err := gremlin.Query(`g.V(uuid).inE('parent')`).Bindings(gremlin.Bind{
 		"uuid": n.UUID,
 	}).Exec()
 	if err != nil {
@@ -191,7 +189,6 @@ func (n Node) CurrentLinks() ([]Link, error) {
 	}
 	json.Unmarshal(data2, &links)
 	for _, link := range links {
-		link.Client = n.Client
 		allLinks = append(allLinks, link)
 	}
 
@@ -255,7 +252,7 @@ func (n Node) UpdateLinks() error {
 }
 
 func (n Node) Delete() error {
-	_, err := n.Client.Query(`g.V(uuid).drop()`).Bindings(gremlin.Bind{
+	_, err := gremlin.Query(`g.V(uuid).drop()`).Bindings(gremlin.Bind{
 		"uuid": n.UUID,
 	}).Exec()
 	if err != nil {
@@ -356,19 +353,19 @@ func setupRabbit(rabbitURI string, rabbitVHost string, rabbitQueue string) (*amq
 	return conn, ch, msgs
 }
 
-func synchronize(session gockle.Session, client *gremlin.GremlinClient, msgs <-chan amqp.Delivery) {
+func synchronize(session gockle.Session, msgs <-chan amqp.Delivery) {
 	for d := range msgs {
 		n := Notification{}
 		json.Unmarshal(d.Body, &n)
 		switch n.Oper {
 		case "CREATE":
-			node := getNode(session, client, n.UUID)
+			node := getNode(session, n.UUID)
 			node.Create()
 			node.CreateLinks()
 			log.Debugf("%s/%s created", n.Type, n.UUID)
 			d.Ack(false)
 		case "UPDATE":
-			node := getNode(session, client, n.UUID)
+			node := getNode(session, n.UUID)
 			node.Update()
 			node.UpdateLinks()
 			log.Debugf("%s/%s updated", n.Type, n.UUID)
@@ -386,19 +383,22 @@ func synchronize(session gockle.Session, client *gremlin.GremlinClient, msgs <-c
 	log.Critical("Finish consuming")
 }
 
-func setupGremlin(gremlinCluster []string) (c gremlin.GremlinClient, err error) {
-	c, err = gremlin.NewGremlinClient(gremlinCluster...)
-	for i := 1; i <= 10; i++ {
-		err = c.Connect()
-		if err != nil {
-			log.Warningf("Failed to connect to Gremlin server, retrying in %ds", i)
-			time.Sleep(time.Duration(i) * time.Second)
-		} else {
-			log.Notice("Connected to Gremlin server.")
-			break
+func setupGremlin(gremlinCluster []string) (err error) {
+	if err := gremlin.NewCluster(gremlinCluster...); err != nil {
+		log.Fatal("Failed to connect to gremlin server.")
+	} else {
+		for i := 1; i <= 10; i++ {
+			_, _, err = gremlin.CreateConnection()
+			if err != nil {
+				log.Warningf("Failed to connect to Gremlin server, retrying in %ds", i)
+				time.Sleep(time.Duration(i) * time.Second)
+			} else {
+				log.Notice("Connected to Gremlin server.")
+				break
+			}
 		}
 	}
-	return c, err
+	return err
 }
 
 func setupCassandra(cassandraCluster []string) (gockle.Session, error) {
@@ -421,7 +421,6 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 		conn    *amqp.Connection
 		msgs    <-chan amqp.Delivery
 		session gockle.Session
-		client  gremlin.GremlinClient
 		err     error
 	)
 
@@ -429,11 +428,7 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 	backendFormatter := logging.NewBackendFormatter(backend, format)
 	logging.SetBackend(backendFormatter)
 
-	client, err = setupGremlin(gremlinCluster)
-	if err != nil {
-		log.Fatalf("Failed to connect to Gremlin: %s", err)
-	}
-	defer client.Close()
+	setupGremlin(gremlinCluster)
 
 	session, err = setupCassandra(cassandraCluster)
 	if err != nil {
@@ -448,25 +443,24 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 
 	if noLoad == false {
 		os.Remove(SyncFile)
-		load(session, &client)
+		load(session)
 		ioutil.WriteFile(SyncFile, []byte(""), 0644)
 	}
 
 	if noSync == false {
-		go synchronize(session, &client, msgs)
+		go synchronize(session, msgs)
 		log.Notice("Listening for updates. To exit press CTRL+C")
 		forever := make(chan bool)
 		<-forever
 	}
 }
 
-func getNode(session gockle.Session, client *gremlin.GremlinClient, uuid string) Node {
+func getNode(session gockle.Session, uuid string) Node {
 	var (
 		column1   string
 		valueJSON []byte
 	)
 	node := Node{
-		Client:     client,
 		UUID:       uuid,
 		Properties: map[string]interface{}{},
 	}
@@ -480,19 +474,9 @@ func getNode(session gockle.Session, client *gremlin.GremlinClient, uuid string)
 			split := strings.Split(column1, ":")
 			switch split[0] {
 			case "ref":
-				node.Links = append(node.Links, Link{
-					Client: client,
-					Source: uuid,
-					Target: split[2],
-					Type:   split[0],
-				})
+				node.Links = append(node.Links, Link{Source: uuid, Target: split[2], Type: split[0]})
 			case "parent":
-				node.Links = append(node.Links, Link{
-					Client: client,
-					Source: split[2],
-					Target: uuid,
-					Type:   split[0],
-				})
+				node.Links = append(node.Links, Link{Source: split[2], Target: uuid, Type: split[0]})
 			case "type":
 				var value string
 				json.Unmarshal(valueJSON, &value)
@@ -516,10 +500,10 @@ func getNode(session gockle.Session, client *gremlin.GremlinClient, uuid string)
 	return node
 }
 
-func loadNodes(uuids <-chan string, links chan<- []Link, session gockle.Session, client *gremlin.GremlinClient, wg *sync.WaitGroup) {
+func loadNodes(uuids <-chan string, links chan<- []Link, session gockle.Session, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for uuid := range uuids {
-		node := getNode(session, client, uuid)
+		node := getNode(session, uuid)
 		if err := node.Create(); err != nil {
 			fmt.Println()
 			log.Criticalf("Failed to create node %v : %s", node, err)
@@ -543,7 +527,7 @@ func loadLinks(links <-chan []Link, session gockle.Session, wg *sync.WaitGroup) 
 	}
 }
 
-func load(session gockle.Session, client *gremlin.GremlinClient) {
+func load(session gockle.Session) {
 	var (
 		uuid    string
 		wgNodes sync.WaitGroup
@@ -563,7 +547,7 @@ func load(session gockle.Session, client *gremlin.GremlinClient) {
 
 	for w := 1; w <= NodesWorkers; w++ {
 		wgNodes.Add(1)
-		go loadNodes(uuids, links, session, client, &wgNodes)
+		go loadNodes(uuids, links, session, &wgNodes)
 	}
 
 	r := session.ScanIterator(`SELECT column1 FROM obj_fq_name_table`)
