@@ -24,20 +24,21 @@ avail_cleans = [(name, obj) for name, obj in inspect.getmembers(sys.modules[__na
 
 class Fsck(Command):
     description = 'Checks and optionally clean API inconsistencies'
-    gremlin_server = Option(default=os.environ.get('GREMLIN_SERVER', 'localhost:8182'),
+    gremlin_server = Option(default=os.environ.get('GREMLIN_FSCK_SERVER', 'localhost:8182'),
                             help='host:port of gremlin serveri (default: %(default)s)')
     checks = Option(help='Name of checks to run',
                     nargs='*', choices=[n[6:] for n, o in avail_checks],
                     default=[n[6:] for n, o in avail_checks],
                     metavar='check')
-    clean = Option(help='Run cleans',
+    clean = Option(help='Run cleans (default: %(default)s)',
                    action='store_true',
-                   default=False)
-    loop = Option(help='Run in loop',
+                   default=bool(os.environ.get('GREMLIN_FSCK_CLEAN', False)))
+    loop = Option(help='Run in loop (default: %(default)s)',
                   action='store_true',
-                  default=False)
-    loop_interval = Option(help='Interval between loops in seconds',
-                           default=60 * 5, type=float)
+                  default=bool(os.environ.get('GREMLIN_FSCK_LOOP', False)))
+    loop_interval = Option(help='Interval between loops in seconds (default: %(default)s)',
+                           default=os.environ.get('GREMLIN_FSCK_LOOP_INTERVAL', 60 * 5),
+                           type=float)
 
     def _check_by_name(self, name):
         c = None
