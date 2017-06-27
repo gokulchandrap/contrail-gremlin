@@ -1,3 +1,4 @@
+import os
 import sys
 import inspect
 from six import text_type
@@ -23,8 +24,8 @@ avail_cleans = [(name, obj) for name, obj in inspect.getmembers(sys.modules[__na
 
 class Fsck(Command):
     description = 'Checks and optionally clean API inconsistencies'
-    gremlin_server = Option(default='localhost:8182',
-                            help='host:port of gremlin server')
+    gremlin_server = Option(default=os.environ.get('GREMLIN_SERVER', 'localhost:8182'),
+                            help='host:port of gremlin serveri (default: %(default)s)')
     checks = Option(help='Name of checks to run',
                     nargs='*', choices=[n[6:] for n, o in avail_checks],
                     default=[n[6:] for n, o in avail_checks],
