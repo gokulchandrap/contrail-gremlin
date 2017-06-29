@@ -85,14 +85,15 @@ class Fsck(Command):
             r = [Resource(res_type.replace('_', '-'), uuid=uuid["@value"])
                  for res_type, uuid in r]
             if len(r) > 0:
-                printo('%s check found %d bad resources:' % (check_name, len(r)))
+                printo('Found %d %s:' % (len(r), check.__doc__.strip()))
                 printo('%s' % "\n".join([text_type(r_) for r_ in r]))
                 if clean is False:
                     continue
                 try:
                     clean = self._clean_by_name(check_name)
                     printo('Cleaning...')
-                    parallel_map(clean, r, workers=20)
+                    for r_ in r:
+                        clean(r_)
                     printo('Clean done.')
                 except CommandError:
                     printo('Clean not found for this check. Skip.')
