@@ -32,10 +32,10 @@ class Fsck(Command):
                     metavar='check')
     clean = Option(help='Run cleans (default: %(default)s)',
                    action='store_true',
-                   default=bool(os.environ.get('GREMLIN_FSCK_CLEAN', False)))
+                   default=bool(int(os.environ.get('GREMLIN_FSCK_CLEAN', 0))))
     loop = Option(help='Run in loop (default: %(default)s)',
                   action='store_true',
-                  default=bool(os.environ.get('GREMLIN_FSCK_LOOP', False)))
+                  default=bool(int(os.environ.get('GREMLIN_FSCK_LOOP', 0))))
     loop_interval = Option(help='Interval between loops in seconds (default: %(default)s)',
                            default=os.environ.get('GREMLIN_FSCK_LOOP_INTERVAL', 60 * 5),
                            type=float)
