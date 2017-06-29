@@ -6,12 +6,10 @@ import gevent
 
 from contrail_api_cli.command import Command, Option
 from contrail_api_cli.exceptions import CommandError
-from contrail_api_cli.resource import Resource
-from contrail_api_cli.utils import parallel_map, printo
+from contrail_api_cli.utils import printo
 
 from gremlin_python.structure.graph import Graph
 from gremlin_python.driver.driver_remote_connection import DriverRemoteConnection
-from gremlin_python.process.graph_traversal import id, label, union
 
 from .checks import *
 
@@ -79,11 +77,7 @@ class Fsck(Command):
         printo('Running checks...')
         for check_name in checks:
             check = self._check_by_name(check_name)
-            t = check(self.g)
-            r = t.map(union(label(), id()).fold()).toList()
-            # convert gremlin result in [Resource]
-            r = [Resource(res_type.replace('_', '-'), uuid=uuid["@value"])
-                 for res_type, uuid in r]
+            r = check(self.g)
             if len(r) > 0:
                 printo('Found %d %s:' % (len(r), check.__doc__.strip()))
                 printo('%s' % "\n".join([text_type(r_) for r_ in r]))

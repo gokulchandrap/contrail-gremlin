@@ -1,7 +1,10 @@
 from gremlin_python.process.graph_traversal import __
 from gremlin_python.process.traversal import within, eq
 
+from .utils import to_resource
 
+
+@to_resource
 def check_vn_with_iip_without_vmi(g):
     """instance-ip without any virtual-machine-interface
     """
@@ -14,6 +17,7 @@ def clean_vn_with_iip_without_vmi(iip):
     iip.delete()
 
 
+@to_resource
 def check_unused_rt(g):
     """unused route-target
     """
@@ -26,6 +30,7 @@ def clean_unused_rt(rt):
     rt.delete()
 
 
+@to_resource
 def check_iip_without_instance_ip_address(g):
     """instance-ip without any instance_ip_address property
     """
@@ -34,6 +39,7 @@ def check_iip_without_instance_ip_address(g):
     )
 
 
+@to_resource
 def check_snat_without_lr(g):
     """Snat SI without any logical-router
     """
@@ -41,6 +47,7 @@ def check_snat_without_lr(g):
         .in_().hasLabel("service_instance").not_(__.in_().hasLabel("logical_router"))
 
 
+@to_resource
 def check_lbaas_without_lbpool(g):
     """LBaaS SI without any loadbalancer-pool
     """
@@ -50,6 +57,7 @@ def check_lbaas_without_lbpool(g):
         .not_(__.in_().hasLabel("loadbalancer_pool"))
 
 
+@to_resource
 def check_lbaas_without_vip(g):
     """LBaaS SI without any virtual-ip
     """
@@ -57,6 +65,7 @@ def check_lbaas_without_vip(g):
         .where(__.in_().hasLabel("loadbalancer_pool").not_(__.in_().hasLabel("virtual_ip")))
 
 
+@to_resource
 def check_ri_without_rt(g):
     """routing-instance that doesn't have any route-target (that crashes schema)
     """
@@ -65,6 +74,7 @@ def check_ri_without_rt(g):
         .not_(__.out().hasLabel("route_target"))
 
 
+@to_resource
 def check_acl_without_sg(g):
     """access-control-list without security-group
     """
