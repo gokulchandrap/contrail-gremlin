@@ -1,10 +1,10 @@
 dist: trusty
 
 before_install:
-    - wget http://www-eu.apache.org/dist/tinkerpop/3.2.4/apache-tinkerpop-gremlin-server-3.2.4-bin.zip
-    - unzip apache-tinkerpop-gremlin-server-3.2.4-bin.zip
-    - cp conf/* apache-tinkerpop-gremlin-server-3.2.4/conf
-    - cd apache-tinkerpop-gremlin-server-3.2.4
+    - wget http://www-eu.apache.org/dist/tinkerpop/3.2.5/apache-tinkerpop-gremlin-server-3.2.5-bin.zip
+    - unzip apache-tinkerpop-gremlin-server-3.2.5-bin.zip
+    - cp conf/* apache-tinkerpop-gremlin-server-3.2.5/conf
+    - cd apache-tinkerpop-gremlin-server-3.2.5
     - bin/gremlin-server.sh conf/gremlin-server-contrail.yaml &
     - cd ../gremlin-sync
 
