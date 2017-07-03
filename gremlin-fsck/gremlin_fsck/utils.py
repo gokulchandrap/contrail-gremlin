@@ -1,11 +1,23 @@
 from __future__ import unicode_literals
 import functools
+import json
+from cStringIO import StringIO
+import sys
 
 from gremlin_python.process.graph_traversal import id, label, union, values
 
 from contrail_api_cli.resource import Resource
 from contrail_api_cli.exceptions import CommandError
 from contrail_api_cli.utils import printo
+
+
+JSON_OUTPUT = False
+
+
+def log(string):
+    if JSON_OUTPUT:
+        return
+    printo(string)
 
 
 def to_resources(fun):
@@ -28,6 +40,29 @@ def log_resources(fun):
             printo('Found %d %s:' % (len(r), fun.__doc__.strip()))
             for r_ in r:
                 printo('  - %s/%s - %s' % (r_.type, r_.uuid, r_.fq_name))
+        return r
+    return wrapper
+
+
+def log_json(fun):
+    def json_log(fun, total, output):
+        return json.dumps({
+            "application": 'gremlin-fsck',
+            "check": fun.__name__,
+            "total": total,
+            "output": output
+        })
+
+    @functools.wraps(fun)
+    def wrapper(*args):
+        if JSON_OUTPUT:
+            old_stdout = sys.stdout
+            sys.stdout = my_stdout = StringIO()
+        r = fun(*args)
+        if JSON_OUTPUT:
+            sys.stdout = old_stdout
+            printo(json_log(fun, len(r), my_stdout.getvalue()))
+            my_stdout.close()
         return r
     return wrapper
 

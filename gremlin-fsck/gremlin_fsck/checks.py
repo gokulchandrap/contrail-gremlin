@@ -1,16 +1,17 @@
-from gremlin_python.process.graph_traversal import __, union, select, values
+from gremlin_python.process.graph_traversal import __, union, select
 from gremlin_python.process.traversal import within, eq
 from gremlin_python import statics
 
 from contrail_api_cli.utils import printo
 
-from .utils import to_resources, log_resources, v_to_r
+from .utils import to_resources, log_resources, log_json, v_to_r
 
 
 statics.default_lambda_language = 'gremlin-groovy'
 statics.load_statics(globals())
 
 
+@log_json
 @log_resources
 @to_resources
 def check_vn_with_iip_without_vmi(g):
@@ -25,6 +26,7 @@ def clean_vn_with_iip_without_vmi(iip):
     iip.delete()
 
 
+@log_json
 @log_resources
 @to_resources
 def check_unused_rt(g):
@@ -39,6 +41,7 @@ def clean_unused_rt(rt):
     rt.delete()
 
 
+@log_json
 @log_resources
 @to_resources
 def check_iip_without_instance_ip_address(g):
@@ -49,6 +52,7 @@ def check_iip_without_instance_ip_address(g):
     )
 
 
+@log_json
 @log_resources
 @to_resources
 def check_snat_without_lr(g):
@@ -58,6 +62,7 @@ def check_snat_without_lr(g):
         .in_().hasLabel("service_instance").not_(__.in_().hasLabel("logical_router"))
 
 
+@log_json
 @log_resources
 @to_resources
 def check_lbaas_without_lbpool(g):
@@ -69,6 +74,7 @@ def check_lbaas_without_lbpool(g):
         .not_(__.in_().hasLabel("loadbalancer_pool"))
 
 
+@log_json
 @log_resources
 @to_resources
 def check_lbaas_without_vip(g):
@@ -78,6 +84,7 @@ def check_lbaas_without_vip(g):
         .where(__.in_().hasLabel("loadbalancer_pool").not_(__.in_().hasLabel("virtual_ip")))
 
 
+@log_json
 @log_resources
 @to_resources
 def check_ri_without_rt(g):
@@ -88,6 +95,7 @@ def check_ri_without_rt(g):
         .not_(__.out().hasLabel("route_target"))
 
 
+@log_json
 @log_resources
 @to_resources
 def check_acl_without_sg(g):
@@ -102,6 +110,7 @@ def clean_acl_without_sg(acl):
     acl.delete()
 
 
+@log_json
 def check_duplicate_ip_addresses(g):
     """networks with duplicate ip addresses
     """
@@ -126,6 +135,7 @@ def check_duplicate_ip_addresses(g):
     return r
 
 
+@log_json
 def check_duplicate_default_sg(g):
     """duplicate default security groups
     """
@@ -145,6 +155,7 @@ def check_duplicate_default_sg(g):
     return r
 
 
+@log_json
 def check_duplicate_public_ips(g):
     """duplicate public ips
     """

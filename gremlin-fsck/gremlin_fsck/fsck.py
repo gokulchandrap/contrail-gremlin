@@ -7,11 +7,11 @@ import gevent
 
 from contrail_api_cli.command import Command, Option
 from contrail_api_cli.exceptions import CommandError
-from contrail_api_cli.utils import printo
 
 from gremlin_python.structure.graph import Graph
 from gremlin_python.driver.driver_remote_connection import DriverRemoteConnection
 
+from . import utils
 from .checks import *
 
 
@@ -38,6 +38,9 @@ class Fsck(Command):
     loop_interval = Option(help='Interval between loops in seconds (default: %(default)s)',
                            default=os.environ.get('GREMLIN_FSCK_LOOP_INTERVAL', 60 * 5),
                            type=float)
+    json = Option(help='Output logs in json',
+                  action='store_true',
+                  default=False)
 
     def _check_by_name(self, name):
         c = None
@@ -61,7 +64,8 @@ class Fsck(Command):
             raise CommandError("Can't find %s clean" % name)
         return c
 
-    def __call__(self, gremlin_server=None, checks=None, clean=False, loop=False, loop_interval=None):
+    def __call__(self, gremlin_server=None, checks=None, clean=False, loop=False, loop_interval=None, json=False):
+        utils.JSON_OUTPUT = json
         graph = Graph()
         self.g = graph.traversal().withRemote(DriverRemoteConnection('ws://%s/gremlin' % gremlin_server, 'g'))
         if loop is True:
@@ -75,7 +79,7 @@ class Fsck(Command):
             gevent.sleep(loop_interval)
 
     def run(self, checks, clean):
-        printo('Running checks...')
+        utils.log('Running checks...')
         start = time()
         for check_name in checks:
             check = self._check_by_name(check_name)
@@ -85,12 +89,12 @@ class Fsck(Command):
                     continue
                 try:
                     clean = self._clean_by_name(check_name)
-                    printo('Cleaning...')
+                    utils.log('Cleaning...')
                     for r_ in r:
                         clean(r_)
-                    printo('Clean done.')
+                    utils.log('Clean done.')
                 except CommandError:
-                    printo('Clean not found for this check. Skip.')
+                    utils.log('Clean not found for this check. Skip.')
                     pass
         end = time() - start
-        printo('Checks done in %ss' % end)
+        utils.log('Checks done in %ss' % end)
