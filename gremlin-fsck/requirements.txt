@@ -1,3 +1,2 @@
-requests>=2.14.2
 git+https://github.com/cloudwatt/contrail-api-cli.git
 git+https://github.com/cloudwatt/contrail-api-cli-extra.git
