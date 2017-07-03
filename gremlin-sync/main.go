@@ -428,7 +428,10 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 	backendFormatter := logging.NewBackendFormatter(backend, format)
 	logging.SetBackend(backendFormatter)
 
-	setupGremlin(gremlinCluster)
+	err = setupGremlin(gremlinCluster)
+	if err != nil {
+		log.Fatalf("Failed to connect to Gremlin server: %s", err)
+	}
 
 	session, err = setupCassandra(cassandraCluster)
 	if err != nil {
