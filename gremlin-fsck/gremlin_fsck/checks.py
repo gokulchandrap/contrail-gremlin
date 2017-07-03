@@ -8,6 +8,7 @@ from contrail_api_cli.manager import CommandManager
 from .utils import to_resources, log_resources, log_json, v_to_r
 
 
+CommandManager().load_namespace('contrail_api_cli.clean')
 rm = CommandManager().get('rm')
 clean_stale_si = CommandManager().get('clean-stale-si')
 fix_sg = CommandManager().get('fix-sg')
