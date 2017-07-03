@@ -4,6 +4,9 @@ import sys
 import inspect
 from time import time
 import gevent
+import socket
+
+from tornado.httpclient import HTTPError
 
 from contrail_api_cli.command import Command, Option
 from contrail_api_cli.exceptions import CommandError
@@ -67,7 +70,10 @@ class Fsck(Command):
     def __call__(self, gremlin_server=None, checks=None, clean=False, loop=False, loop_interval=None, json=False):
         utils.JSON_OUTPUT = json
         graph = Graph()
-        self.g = graph.traversal().withRemote(DriverRemoteConnection('ws://%s/gremlin' % gremlin_server, 'g'))
+        try:
+            self.g = graph.traversal().withRemote(DriverRemoteConnection('ws://%s/gremlin' % gremlin_server, 'g'))
+        except (HTTPError, socket.error) as e:
+            raise CommandError('Failed to connect to Gremlin server: %s' % e)
         if loop is True:
             self.run_loop(checks, clean, loop_interval)
         else:
