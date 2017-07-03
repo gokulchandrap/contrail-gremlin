@@ -58,10 +58,16 @@ def log_json(fun):
         if JSON_OUTPUT:
             old_stdout = sys.stdout
             sys.stdout = my_stdout = StringIO()
-        r = fun(*args)
+        try:
+            r = fun(*args)
+        except CommandError as e:
+            printo(e)
         if JSON_OUTPUT:
             sys.stdout = old_stdout
-            printo(json_log(fun, len(r), my_stdout.getvalue()))
+            total = 1
+            if isinstance(r, list):
+                total = len(r)
+            printo(json_log(fun, total, my_stdout.getvalue()))
             my_stdout.close()
         return r
     return wrapper

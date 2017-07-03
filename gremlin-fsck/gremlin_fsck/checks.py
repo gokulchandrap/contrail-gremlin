@@ -3,9 +3,14 @@ from gremlin_python.process.traversal import within, eq
 from gremlin_python import statics
 
 from contrail_api_cli.utils import printo
+from contrail_api_cli.manager import CommandManager
 
 from .utils import to_resources, log_resources, log_json, v_to_r
 
+
+rm = CommandManager().get('rm')
+clean_stale_si = CommandManager().get('clean-stale-si')
+fix_sg = CommandManager().get('fix-sg')
 
 statics.default_lambda_language = 'gremlin-groovy'
 statics.load_statics(globals())
@@ -24,6 +29,7 @@ def check_vn_with_iip_without_vmi(g):
 
 def clean_vn_with_iip_without_vmi(iip):
     iip.delete()
+    printo('Deleted %s' % iip)
 
 
 @log_json
@@ -39,6 +45,7 @@ def check_unused_rt(g):
 
 def clean_unused_rt(rt):
     rt.delete()
+    printo('Deleted %s' % rt)
 
 
 @log_json
@@ -63,6 +70,11 @@ def check_snat_without_lr(g):
 
 
 @log_json
+def clean_snat_without_lr(si):
+    clean_stale_si([si.path])
+
+
+@log_json
 @log_resources
 @to_resources
 def check_lbaas_without_lbpool(g):
@@ -75,6 +87,11 @@ def check_lbaas_without_lbpool(g):
 
 
 @log_json
+def clean_lbaas_without_lbpool(si):
+    clean_stale_si([si.path])
+
+
+@log_json
 @log_resources
 @to_resources
 def check_lbaas_without_vip(g):
@@ -82,6 +99,11 @@ def check_lbaas_without_vip(g):
     """
     return g.V().hasLabel("service_instance") \
         .where(__.in_().hasLabel("loadbalancer_pool").not_(__.in_().hasLabel("virtual_ip")))
+
+
+@log_json
+def clean_lbaas_without_vip(si):
+    clean_stale_si([si.path])
 
 
 @log_json
@@ -106,8 +128,10 @@ def check_acl_without_sg(g):
     )
 
 
+@log_json
 def clean_acl_without_sg(acl):
     acl.delete()
+    printo('Deleted %s' % acl)
 
 
 @log_json
@@ -147,12 +171,19 @@ def check_duplicate_default_sg(g):
     ).toList()
     if len(r) > 0:
         printo('Found %d %s:' % (len(r), check_duplicate_default_sg.__doc__.strip()))
+    projects = []
     for dup in r:
         for p, sgs in dup.items():
-            printo("  %s:" % v_to_r(p))
+            projects.append(v_to_r(p))
+            printo("  %s:" % projects[-1])
             for sg in sgs:
                 printo("    - %s" % sg)
-    return r
+    return projects
+
+
+@log_json
+def clean_duplicate_default_sg(p):
+    fix_sg(paths=[p.path], yes=True)
 
 
 @log_json

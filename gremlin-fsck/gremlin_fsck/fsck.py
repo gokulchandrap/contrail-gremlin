@@ -50,7 +50,7 @@ class Fsck(Command):
             else:
                 c = check
         if c is None:
-            raise CommandError("Can't find %s check" % name)
+            raise CommandError("Can't find %s check method" % name)
         return c
 
     def _clean_by_name(self, name):
@@ -61,7 +61,7 @@ class Fsck(Command):
             else:
                 c = clean
         if c is None:
-            raise CommandError("Can't find %s clean" % name)
+            raise CommandError("Can't find %s clean method" % name)
         return c
 
     def __call__(self, gremlin_server=None, checks=None, clean=False, loop=False, loop_interval=None, json=False):
@@ -93,8 +93,8 @@ class Fsck(Command):
                     for r_ in r:
                         clean(r_)
                     utils.log('Clean done.')
-                except CommandError:
-                    utils.log('Clean not found for this check. Skip.')
+                except CommandError as e:
+                    utils.log(e)
                     pass
         end = time() - start
         utils.log('Checks done in %ss' % end)
