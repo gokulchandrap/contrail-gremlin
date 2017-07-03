@@ -12,7 +12,7 @@ Run gremlin server
     bin/gremlin-server.sh conf/gremlin-server-contrail.yaml
 
 Run gremlin-sync
-========
+================
 
 Build (you need golang 1.7)
 
@@ -40,3 +40,16 @@ Then you can query the remote graph with ':>'
 
     :> g.V()
     :> g.V().hasLabel('virtual_network')
+
+Run gremlin-fsck
+================
+
+gremlin-fsck is a contrail-api-cli command. It will run different consistency checks on the gremlin server and clean/fix resources if needed.
+
+    cd gremlin-fsck
+    pip install -r requirements.txt
+    python setup.py install
+
+    contrail-api-cli fsck [--clean] [--loop] ...
+
+See --help for all options.
