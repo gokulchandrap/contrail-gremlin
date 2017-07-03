@@ -1,7 +1,8 @@
+from __future__ import unicode_literals
 import os
 import sys
 import inspect
-from six import text_type
+from time import time
 import gevent
 
 from contrail_api_cli.command import Command, Option
@@ -75,12 +76,11 @@ class Fsck(Command):
 
     def run(self, checks, clean):
         printo('Running checks...')
+        start = time()
         for check_name in checks:
             check = self._check_by_name(check_name)
             r = check(self.g)
             if len(r) > 0:
-                printo('Found %d %s:' % (len(r), check.__doc__.strip()))
-                printo('%s' % "\n".join([text_type(r_) for r_ in r]))
                 if clean is False:
                     continue
                 try:
@@ -92,4 +92,5 @@ class Fsck(Command):
                 except CommandError:
                     printo('Clean not found for this check. Skip.')
                     pass
-        printo('Checks done.')
+        end = time() - start
+        printo('Checks done in %ss' % end)

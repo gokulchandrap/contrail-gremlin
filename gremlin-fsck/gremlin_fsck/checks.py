@@ -1,10 +1,18 @@
-from gremlin_python.process.graph_traversal import __
+from gremlin_python.process.graph_traversal import __, union, select, values
 from gremlin_python.process.traversal import within, eq
+from gremlin_python import statics
 
-from .utils import to_resource
+from contrail_api_cli.utils import printo
+
+from .utils import to_resources, log_resources, v_to_r
 
 
-@to_resource
+statics.default_lambda_language = 'gremlin-groovy'
+statics.load_statics(globals())
+
+
+@log_resources
+@to_resources
 def check_vn_with_iip_without_vmi(g):
     """instance-ip without any virtual-machine-interface
     """
@@ -17,7 +25,8 @@ def clean_vn_with_iip_without_vmi(iip):
     iip.delete()
 
 
-@to_resource
+@log_resources
+@to_resources
 def check_unused_rt(g):
     """unused route-target
     """
@@ -30,7 +39,8 @@ def clean_unused_rt(rt):
     rt.delete()
 
 
-@to_resource
+@log_resources
+@to_resources
 def check_iip_without_instance_ip_address(g):
     """instance-ip without any instance_ip_address property
     """
@@ -39,7 +49,8 @@ def check_iip_without_instance_ip_address(g):
     )
 
 
-@to_resource
+@log_resources
+@to_resources
 def check_snat_without_lr(g):
     """Snat SI without any logical-router
     """
@@ -47,7 +58,8 @@ def check_snat_without_lr(g):
         .in_().hasLabel("service_instance").not_(__.in_().hasLabel("logical_router"))
 
 
-@to_resource
+@log_resources
+@to_resources
 def check_lbaas_without_lbpool(g):
     """LBaaS SI without any loadbalancer-pool
     """
@@ -57,7 +69,8 @@ def check_lbaas_without_lbpool(g):
         .not_(__.in_().hasLabel("loadbalancer_pool"))
 
 
-@to_resource
+@log_resources
+@to_resources
 def check_lbaas_without_vip(g):
     """LBaaS SI without any virtual-ip
     """
@@ -65,7 +78,8 @@ def check_lbaas_without_vip(g):
         .where(__.in_().hasLabel("loadbalancer_pool").not_(__.in_().hasLabel("virtual_ip")))
 
 
-@to_resource
+@log_resources
+@to_resources
 def check_ri_without_rt(g):
     """routing-instance that doesn't have any route-target (that crashes schema)
     """
@@ -74,7 +88,8 @@ def check_ri_without_rt(g):
         .not_(__.out().hasLabel("route_target"))
 
 
-@to_resource
+@log_resources
+@to_resources
 def check_acl_without_sg(g):
     """access-control-list without security-group
     """
@@ -85,3 +100,57 @@ def check_acl_without_sg(g):
 
 def clean_acl_without_sg(acl):
     acl.delete()
+
+
+def check_duplicate_ip_addresses(g):
+    """networks with duplicate ip addresses
+    """
+    r = g.V().hasLabel("virtual_network").as_('vn').flatMap(
+        union(
+            select('vn'),
+            __.in_().hasLabel("instance_ip").has("instance_ip_address")
+            .group().by("instance_ip_address").unfold()
+            .filter(lambda: "it.get().value.size() > 1")
+        ).fold().filter(lambda: "it.get().size() > 1")
+    ).toList()
+    if len(r) > 0:
+        printo('Found %d %s:' % (len(r), check_duplicate_ip_addresses.__doc__.strip()))
+    for dup in r:
+        # First item is the vn
+        printo("  - %s" % v_to_r(dup[0]))
+        for ips in dup[1:]:
+            for ip, iips in ips.items():
+                printo("      %s:" % ip)
+                for iip in iips:
+                    printo("        - %s" % v_to_r(iip))
+    return r
+
+
+def check_duplicate_default_sg(g):
+    """duplicate default security groups
+    """
+    r = g.V().hasLabel('project').flatMap(
+        __.out().hasLabel('security_group').has('display_name', 'default').group().by(
+            __.in_().hasLabel('project').id()
+        ).unfold()
+        .filter(lambda: "it.get().value.size() > 1")
+    ).toList()
+    if len(r) > 0:
+        printo('Found %d %s:' % (len(r), check_duplicate_default_sg.__doc__.strip()))
+    for dup in r:
+        for p, sgs in dup.items():
+            printo("  %s:" % v_to_r(p))
+            for sg in sgs:
+                printo("    - %s" % sg)
+    return r
+
+
+def check_duplicate_public_ips(g):
+    """duplicate public ips
+    """
+    r = g.V().hasLabel(within('floating_ip', 'instance_ip')) \
+        .property('ip_address', __.values('floating_ip_address', 'instance_ip_address')).group().by('ip_address').unfold() \
+        .filter(lambda: "it.get().value.size() > 1 && it.get().value.findAll{it.label.value == 'floating_ip'} != []").toList()
+    if len(r) > 0:
+        printo('Found %d %s:' % (len(r), check_duplicate_public_ips.__doc__.strip()))
+    return r
