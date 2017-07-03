@@ -28,6 +28,7 @@ def check_vn_with_iip_without_vmi(g):
     ).in_().hasLabel("instance_ip")
 
 
+@log_json
 def clean_vn_with_iip_without_vmi(iip):
     iip.delete()
     printo('Deleted %s' % iip)
@@ -44,6 +45,7 @@ def check_unused_rt(g):
     )
 
 
+@log_json
 def clean_unused_rt(rt):
     rt.delete()
     printo('Deleted %s' % rt)
