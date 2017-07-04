@@ -51,9 +51,11 @@ def log_json(fun):
     def json_log(fun, total, output):
         return json.dumps({
             "application": 'gremlin-fsck',
-            "check": fun.__name__,
+            "type": fun.__name__.split('_')[0],
+            "name": fun.__name__,
             "total": total,
-            "output": output
+            "output": output,
+            "success": total >= 0
         })
 
     @functools.wraps(fun)
