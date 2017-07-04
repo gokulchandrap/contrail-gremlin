@@ -70,9 +70,9 @@ func (l Link) Delete() error {
 }
 
 type Node struct {
-	UUID       string
-	Type       string
-	Properties map[string]interface{}
+	UUID       string                 `json:"id"`
+	Type       string                 `json:"label"`
+	Properties map[string]interface{} `json:"properties"`
 	Links      []Link
 }
 
@@ -111,6 +111,22 @@ func (n Node) createUpdateQuery(base string) ([]string, error) {
 		queries = append(queries, query)
 	}
 	return queries, nil
+}
+
+func (n Node) Exists() (exists bool, err error) {
+	var (
+		data []byte
+		res  []Node
+	)
+	data, err = gremlin.Query(`g.V(uuid).hasLabel(type)`).Bindings(gremlin.Bind{
+		"uuid": n.UUID,
+		"type": n.Type,
+	}).Exec()
+	if err != nil {
+		return exists, err
+	}
+	json.Unmarshal(data, &res)
+	return len(res) > 0, err
 }
 
 func (n Node) Create() error {

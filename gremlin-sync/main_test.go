@@ -24,7 +24,10 @@ func checkNode(t *testing.T, query string, bindings gremlin.Bind) []string {
 func TestNodeLink(t *testing.T) {
 	var uuids []string
 
-	setupGremlin([]string{"ws://localhost:8182/gremlin"})
+	err := setupGremlin([]string{"ws://localhost:8182/gremlin"})
+	if err != nil {
+		t.Errorf("Failed to connect to gremlin server")
+	}
 
 	vnUUID := uuid.NewV4().String()
 	vn := Node{
@@ -73,8 +76,10 @@ func TestNodeLink(t *testing.T) {
 }
 
 func TestNodeProperties(t *testing.T) {
-
-	setupGremlin([]string{"ws://localhost:8182/gremlin"})
+	err := setupGremlin([]string{"ws://localhost:8182/gremlin"})
+	if err != nil {
+		t.Errorf("Failed to connect to gremlin server")
+	}
 
 	nodeUUID := uuid.NewV4().String()
 	query := "SELECT key, column1, value FROM obj_uuid_table WHERE key=?"
@@ -106,4 +111,27 @@ func TestNodeProperties(t *testing.T) {
 	uuids = checkNode(t, `g.V(uuid).has('object.bool', false).id()`, gremlin.Bind{"uuid": nodeUUID})
 	assert.Equal(t, nodeUUID, uuids[0])
 	uuids = checkNode(t, `g.V(uuid).has('object.subObject.foo', 'bar').id()`, gremlin.Bind{"uuid": nodeUUID})
+}
+
+func TestNodeExists(t *testing.T) {
+	err := setupGremlin([]string{"ws://localhost:8182/gremlin"})
+	if err != nil {
+		t.Errorf("Failed to connect to gremlin server")
+	}
+
+	nodeUUID := uuid.NewV4().String()
+	node := Node{
+		UUID: nodeUUID,
+		Type: "label",
+		Properties: map[string]interface{}{
+			"prop": "value",
+		},
+	}
+	node.Create()
+	exists, _ := node.Exists()
+	assert.Equal(t, exists, true)
+
+	node.UUID = uuid.NewV4().String()
+	exists, _ = node.Exists()
+	assert.Equal(t, exists, false)
 }
