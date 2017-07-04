@@ -3,14 +3,17 @@ import functools
 import json
 from cStringIO import StringIO
 import sys
+from six import text_type
 
 from gremlin_python.process.graph_traversal import id, label, union, values
 
 from contrail_api_cli.resource import Resource
 from contrail_api_cli.exceptions import CommandError
 from contrail_api_cli.utils import printo
+from contrail_api_cli.manager import CommandManager
 
 
+CommandManager(load_default=False).load_namespace('contrail_api_cli.clean')
 JSON_OUTPUT = False
 
 
@@ -61,7 +64,8 @@ def log_json(fun):
         try:
             r = fun(*args)
         except CommandError as e:
-            printo(e)
+            r = -1
+            printo(text_type(e))
         if JSON_OUTPUT:
             sys.stdout = old_stdout
             total = 1
@@ -77,3 +81,7 @@ def v_to_r(v):
     if v.label:
         return Resource(v.label.replace('_', '-'), uuid=v.id["@value"])
     raise CommandError('Vertex has no label, cannot transform it to Resource')
+
+
+def cmd(name):
+    return CommandManager(load_default=False).get(name)

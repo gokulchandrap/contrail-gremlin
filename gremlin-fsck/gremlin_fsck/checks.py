@@ -3,15 +3,9 @@ from gremlin_python.process.traversal import within, eq
 from gremlin_python import statics
 
 from contrail_api_cli.utils import printo
-from contrail_api_cli.manager import CommandManager
 
-from .utils import to_resources, log_resources, log_json, v_to_r
+from .utils import to_resources, log_resources, log_json, v_to_r, cmd
 
-
-CommandManager().load_namespace('contrail_api_cli.clean')
-rm = CommandManager().get('rm')
-clean_stale_si = CommandManager().get('clean-stale-si')
-fix_sg = CommandManager().get('fix-sg')
 
 statics.default_lambda_language = 'gremlin-groovy'
 statics.load_statics(globals())
@@ -74,7 +68,7 @@ def check_snat_without_lr(g):
 
 @log_json
 def clean_snat_without_lr(si):
-    clean_stale_si([si.path])
+    cmd('clean-stale-si')([si.path])
 
 
 @log_json
@@ -91,7 +85,7 @@ def check_lbaas_without_lbpool(g):
 
 @log_json
 def clean_lbaas_without_lbpool(si):
-    clean_stale_si([si.path])
+    cmd('clean-stale-si')([si.path])
 
 
 @log_json
@@ -106,7 +100,7 @@ def check_lbaas_without_vip(g):
 
 @log_json
 def clean_lbaas_without_vip(si):
-    clean_stale_si([si.path])
+    cmd('clean-stale-si')([si.path])
 
 
 @log_json
@@ -186,7 +180,7 @@ def check_duplicate_default_sg(g):
 
 @log_json
 def clean_duplicate_default_sg(p):
-    fix_sg(paths=[p.path], yes=True)
+    cmd('fix-sg')(paths=[p.path], yes=True)
 
 
 @log_json
