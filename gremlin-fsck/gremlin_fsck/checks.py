@@ -57,6 +57,25 @@ def check_iip_without_instance_ip_address(g):
 
 
 @log_json
+def clean_iip_without_instance_ip_address(iip):
+    if not iip.fetch().refs.virtual_machine_interface:
+        printo("%s isn't link to any vmi" % iip)
+        iip.delete()
+        printo('Deleted %s' % iip)
+        return
+    vmi_vm = False
+    for vmi in iip.refs.virtual_machine_interface:
+        if vmi.fetch().refs.virtual_machine:
+            vmi_vm = True
+    if vmi_vm is False:
+        printo("%s vmi isn't linked to any vm")
+        iip.delete()
+        printo('Deleted %s' % iip)
+        vmi.delete()
+        printo('Deleted %s' % vmi)
+
+
+@log_json
 @log_resources
 @to_resources
 def check_snat_without_lr(g):
