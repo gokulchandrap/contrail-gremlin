@@ -4,6 +4,7 @@ import json
 from cStringIO import StringIO
 import sys
 from six import text_type
+import time
 
 from gremlin_python.process.graph_traversal import id, label, union, values
 
@@ -48,14 +49,15 @@ def log_resources(fun):
 
 
 def log_json(fun):
-    def json_log(fun, total, output):
+    def json_log(fun, total, output, duration):
         return json.dumps({
             "application": 'gremlin-fsck',
             "type": fun.__name__.split('_')[0],
             "name": fun.__name__,
             "total": total,
             "output": output,
-            "success": total >= 0
+            "success": total >= 0,
+            "duration": "%0.2f ms" % duration
         })
 
     @functools.wraps(fun)
@@ -63,17 +65,19 @@ def log_json(fun):
         if JSON_OUTPUT:
             old_stdout = sys.stdout
             sys.stdout = my_stdout = StringIO()
+        start = time.time()
         try:
             r = fun(*args)
         except CommandError as e:
             r = -1
             printo(text_type(e))
+        end = time.time()
         if JSON_OUTPUT:
             sys.stdout = old_stdout
             total = 1
             if isinstance(r, list):
                 total = len(r)
-            printo(json_log(fun, total, my_stdout.getvalue()))
+            printo(json_log(fun, total, my_stdout.getvalue(), (end - start) * 1000.0))
             my_stdout.close()
         return r
     return wrapper
