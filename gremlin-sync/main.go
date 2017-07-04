@@ -60,6 +60,24 @@ func (l Link) Create() error {
 	return err
 }
 
+func (l Link) Exists() (exists bool, err error) {
+	var (
+		data []byte
+		res  []bool
+	)
+	data, err = gremlin.Query(`g.V(src).out(type).hasId(dst).hasNext()`).Bindings(
+		gremlin.Bind{
+			"src":  l.Source,
+			"dst":  l.Target,
+			"type": l.Type,
+		}).Exec()
+	if err != nil {
+		return exists, err
+	}
+	json.Unmarshal(data, &res)
+	return res[0], err
+}
+
 func (l Link) Delete() error {
 	_, err := gremlin.Query("g.V(src).bothE().where(otherV().hasId(dst)).drop()").Bindings(
 		gremlin.Bind{
@@ -116,9 +134,9 @@ func (n Node) createUpdateQuery(base string) ([]string, error) {
 func (n Node) Exists() (exists bool, err error) {
 	var (
 		data []byte
-		res  []Node
+		res  []bool
 	)
-	data, err = gremlin.Query(`g.V(uuid).hasLabel(type)`).Bindings(gremlin.Bind{
+	data, err = gremlin.Query(`g.V(uuid).hasLabel(type).hasNext()`).Bindings(gremlin.Bind{
 		"uuid": n.UUID,
 		"type": n.Type,
 	}).Exec()
@@ -126,7 +144,7 @@ func (n Node) Exists() (exists bool, err error) {
 		return exists, err
 	}
 	json.Unmarshal(data, &res)
-	return len(res) > 0, err
+	return res[0], err
 }
 
 func (n Node) Create() error {

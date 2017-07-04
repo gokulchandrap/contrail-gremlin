@@ -135,3 +135,31 @@ func TestNodeExists(t *testing.T) {
 	exists, _ = node.Exists()
 	assert.Equal(t, exists, false)
 }
+
+func TestLinkExists(t *testing.T) {
+
+	node1UUID := uuid.NewV4().String()
+	node1 := Node{
+		UUID: node1UUID,
+		Type: "foo",
+	}
+	node1.Create()
+
+	node2UUID := uuid.NewV4().String()
+	node2 := Node{
+		UUID: node2UUID,
+		Type: "bar",
+	}
+	node2.Create()
+
+	link := Link{
+		Source: node1UUID,
+		Target: node2UUID,
+		Type:   "foobar",
+	}
+	exists, _ := link.Exists()
+	assert.Equal(t, exists, false)
+	link.Create()
+	exists, _ = link.Exists()
+	assert.Equal(t, exists, true)
+}
