@@ -33,9 +33,20 @@ const (
 	QueryMaxSize = 40000
 	VncExchange  = "vnc_config.object-update"
 	QueueName    = "gremlin.sync"
-	NodesWorkers = 10
-	LinksWorkers = 10
+	Workers      = 5
 	SyncFile     = "/tmp/gremlin-synced"
+)
+
+const (
+	NodeCreate = iota
+	RawNodeCreate
+	NodeUpdate
+	NodeDelete
+	LinkCreate
+	LinkDelete
+	NodeSyncStart
+	LinkSyncStart
+	SyncEnd
 )
 
 type Notification struct {
@@ -45,9 +56,11 @@ type Notification struct {
 }
 
 type Link struct {
-	Source string `json:"outV"`
-	Target string `json:"inV"`
-	Type   string `json:"label"`
+	Source     string `json:"outV"`
+	SourceType string `json:"outVLabel"`
+	Target     string `json:"inV"`
+	TargetType string `json:"inVLabel"`
+	Type       string `json:"label"`
 }
 
 func (l Link) Create() error {
@@ -202,8 +215,9 @@ func (n Node) Update() error {
 func (n Node) CurrentLinks() ([]Link, error) {
 	// TODO: get links in one query
 	var (
-		links    []Link
-		allLinks []Link
+		refLinks    []Link
+		parentLinks []Link
+		allLinks    []Link
 	)
 	data1, err := gremlin.Query(`g.V(uuid).outE('ref')`).Bindings(gremlin.Bind{
 		"uuid": n.UUID,
@@ -211,36 +225,35 @@ func (n Node) CurrentLinks() ([]Link, error) {
 	if err != nil {
 		return nil, err
 	}
-	json.Unmarshal(data1, &links)
-	for _, link := range links {
+	json.Unmarshal(data1, &refLinks)
+	for _, link := range refLinks {
 		allLinks = append(allLinks, link)
 	}
+
 	data2, err := gremlin.Query(`g.V(uuid).inE('parent')`).Bindings(gremlin.Bind{
 		"uuid": n.UUID,
 	}).Exec()
 	if err != nil {
 		return nil, err
 	}
-	json.Unmarshal(data2, &links)
-	for _, link := range links {
+	json.Unmarshal(data2, &parentLinks)
+	for _, link := range parentLinks {
 		allLinks = append(allLinks, link)
 	}
 
 	return allLinks, err
 }
 
-// UpdateLinks check the current Node links in gremlin server
-// and apply node.Links accordingly
-func (n Node) UpdateLinks() error {
-	currentLinks, err := n.CurrentLinks()
-	if err != nil {
-		return err
-	}
-
+func (n Node) DiffLinks() ([]Link, []Link, error) {
 	var (
 		toAdd    []Link
 		toRemove []Link
 	)
+
+	currentLinks, err := n.CurrentLinks()
+	if err != nil {
+		return toAdd, toRemove, err
+	}
 
 	for _, l1 := range n.Links {
 		found := false
@@ -266,6 +279,17 @@ func (n Node) UpdateLinks() error {
 		if !found {
 			toRemove = append(toRemove, l1)
 		}
+	}
+
+	return toAdd, toRemove, nil
+}
+
+// UpdateLinks check the current Node links in gremlin server
+// and apply node.Links accordingly
+func (n Node) UpdateLinks() error {
+	toAdd, toRemove, err := n.DiffLinks()
+	if err != nil {
+		return err
 	}
 
 	for _, link := range toAdd {
@@ -393,16 +417,20 @@ func synchronize(session gockle.Session, msgs <-chan amqp.Delivery) {
 		json.Unmarshal(d.Body, &n)
 		switch n.Oper {
 		case "CREATE":
-			node := getNode(session, n.UUID)
-			node.Create()
-			node.CreateLinks()
-			log.Debugf("%s/%s created", n.Type, n.UUID)
+			node, err := getNode(session, n.UUID)
+			if err != nil {
+				node.Create()
+				node.CreateLinks()
+				log.Debugf("%s/%s created", n.Type, n.UUID)
+			}
 			d.Ack(false)
 		case "UPDATE":
-			node := getNode(session, n.UUID)
-			node.Update()
-			node.UpdateLinks()
-			log.Debugf("%s/%s updated", n.Type, n.UUID)
+			node, err := getNode(session, n.UUID)
+			if err != nil {
+				node.Update()
+				node.UpdateLinks()
+				log.Debugf("%s/%s updated", n.Type, n.UUID)
+			}
 			d.Ack(false)
 		case "DELETE":
 			node := Node{UUID: n.UUID, Type: n.Type}
@@ -440,7 +468,8 @@ func setupCassandra(cassandraCluster []string) (gockle.Session, error) {
 	cluster := gocql.NewCluster(cassandraCluster...)
 	cluster.Keyspace = "config_db_uuid"
 	cluster.Consistency = gocql.Quorum
-	cluster.Timeout = 1200 * time.Millisecond
+	cluster.Timeout = 2000 * time.Millisecond
+	cluster.DisableInitialHostLookup = true
 	session, err := cluster.CreateSession()
 	if err != nil {
 		return nil, err
@@ -450,7 +479,7 @@ func setupCassandra(cassandraCluster []string) (gockle.Session, error) {
 	return mockableSession, err
 }
 
-func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string, rabbitVHost string, rabbitQueue string, noLoad bool, noSync bool) {
+func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string, rabbitVHost string, rabbitQueue string, noLoad bool, noReload bool, noSync bool, reloadInterval int) {
 	var (
 		conn    *amqp.Connection
 		msgs    <-chan amqp.Delivery
@@ -479,137 +508,381 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 	}
 
 	if noLoad == false {
-		os.Remove(SyncFile)
 		load(session)
-		ioutil.WriteFile(SyncFile, []byte(""), 0644)
+	}
+
+	if noReload == false {
+		log.Noticef("Configured reload with %dm interval.", reloadInterval)
+		ticker := time.NewTicker(time.Minute * time.Duration(reloadInterval))
+		go func() {
+			for _ = range ticker.C {
+				load(session)
+			}
+		}()
 	}
 
 	if noSync == false {
+		log.Notice("Listening for updates.")
 		go synchronize(session, msgs)
-		log.Notice("Listening for updates. To exit press CTRL+C")
+	}
+
+	if noSync == false || noReload == false {
+		log.Notice("To exit press CTRL+C")
 		forever := make(chan bool)
 		<-forever
 	}
 }
 
-func getNode(session gockle.Session, uuid string) Node {
+func getNode(session gockle.Session, uuid string) (Node, error) {
 	var (
 		column1   string
 		valueJSON []byte
 	)
+	rows, err := session.ScanMapSlice(`SELECT key, column1, value FROM obj_uuid_table WHERE key=?`, uuid)
+	if err != nil {
+		log.Criticalf("[%s] %s", uuid, err)
+		return Node{}, err
+	}
 	node := Node{
 		UUID:       uuid,
 		Properties: map[string]interface{}{},
 	}
-	rows, err := session.ScanMapSlice(`SELECT key, column1, value FROM obj_uuid_table WHERE key=?`, uuid)
-	if err != nil {
-		log.Critical(err)
-	} else {
-		for _, row := range rows {
-			column1 = string(row["column1"].([]byte))
-			valueJSON = []byte(row["value"].(string))
-			split := strings.Split(column1, ":")
-			switch split[0] {
-			case "ref":
-				node.Links = append(node.Links, Link{Source: uuid, Target: split[2], Type: split[0]})
-			case "parent":
-				node.Links = append(node.Links, Link{Source: split[2], Target: uuid, Type: split[0]})
-			case "type":
-				var value string
-				json.Unmarshal(valueJSON, &value)
-				node.Type = value
-			case "fq_name":
-				var value []string
-				json.Unmarshal(valueJSON, &value)
-				for _, c := range value {
-					node.AddProperty("fq_name", c)
-				}
-			case "prop":
-				value, err := gabs.ParseJSON(valueJSON)
-				if err != nil {
-					log.Fatalf("Failed to parse %v", string(valueJSON))
-				}
+	for _, row := range rows {
+		column1 = string(row["column1"].([]byte))
+		valueJSON = []byte(row["value"].(string))
+		split := strings.Split(column1, ":")
+		switch split[0] {
+		case "ref":
+			node.Links = append(node.Links, Link{
+				Source:     uuid,
+				Target:     split[2],
+				TargetType: split[1],
+				Type:       split[0],
+			})
+		case "parent":
+			node.Links = append(node.Links, Link{
+				Source:     split[2],
+				SourceType: split[1],
+				Target:     uuid,
+				Type:       split[0],
+			})
+		case "type":
+			var value string
+			json.Unmarshal(valueJSON, &value)
+			node.Type = value
+		case "fq_name":
+			var value []string
+			json.Unmarshal(valueJSON, &value)
+			for _, c := range value {
+				node.AddProperty("fq_name", c)
+			}
+		case "prop":
+			value, err := gabs.ParseJSON(valueJSON)
+			if err != nil {
+				log.Criticalf("Failed to parse %v", string(valueJSON))
+			} else {
 				node.AddProperties(split[1], value)
 			}
 		}
 	}
-
-	return node
+	return node, nil
 }
 
-func loadNodes(uuids <-chan string, links chan<- []Link, session gockle.Session, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for uuid := range uuids {
-		node := getNode(session, uuid)
-		if err := node.Create(); err != nil {
-			fmt.Println()
-			log.Criticalf("Failed to create node %v : %s", node, err)
-		} else {
-			fmt.Print(`.`)
-		}
-		links <- node.Links
+type LoaderOps struct {
+	opers []LoaderOp
+}
+
+func NewLoaderOps() LoaderOps {
+	return LoaderOps{opers: make([]LoaderOp, 0)}
+}
+
+func (l *LoaderOps) Add(oper int64, obj interface{}) {
+	l.opers = append(l.opers, LoaderOp{oper: oper, obj: obj})
+}
+
+type LoaderOp struct {
+	oper int64
+	obj  interface{}
+}
+
+type Loader struct {
+	count   chan int64
+	wgCount *sync.WaitGroup
+	opers   chan LoaderOps
+	links   chan Node
+	wg      *sync.WaitGroup
+	session gockle.Session
+}
+
+func NewLoader(session gockle.Session) Loader {
+	return Loader{
+		count:   make(chan int64),
+		wgCount: &sync.WaitGroup{},
+		wg:      &sync.WaitGroup{},
+		session: session,
 	}
 }
 
-func loadLinks(links <-chan []Link, session gockle.Session, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for nodeLinks := range links {
-		for _, link := range nodeLinks {
-			if err := link.Create(); err != nil {
-				log.Criticalf("Failed to create link %v : %s", link, err)
-			} else {
-				fmt.Print(`.`)
+func (l *Loader) report() {
+	nodeCreateCount := 0
+	nodeUpdateCount := 0
+	nodeDeleteCount := 0
+	linkCreateCount := 0
+	linkDeleteCount := 0
+
+	nodeSyncStatus := `W`
+	linkSyncStatus := `W`
+
+	for c := range l.count {
+		switch c {
+		case NodeCreate:
+			nodeCreateCount++
+		case NodeUpdate:
+			nodeUpdateCount++
+		case NodeDelete:
+			nodeDeleteCount++
+		case LinkCreate:
+			linkCreateCount++
+		case LinkDelete:
+			linkDeleteCount++
+		case NodeSyncStart:
+			nodeSyncStatus = `R`
+		case LinkSyncStart:
+			linkSyncStatus = `R`
+		case SyncEnd:
+			if nodeSyncStatus == `R` {
+				nodeSyncStatus = `D`
+			}
+			if linkSyncStatus == `R` {
+				linkSyncStatus = `D`
+			}
+		}
+		fmt.Printf("\rProcessing [nodes:%d/%d/%d/%s] [links: %d/%d/%s]",
+			nodeCreateCount, nodeUpdateCount, nodeDeleteCount, nodeSyncStatus,
+			linkCreateCount, linkDeleteCount, linkSyncStatus)
+	}
+	fmt.Println()
+}
+
+func (l *Loader) waitCount() {
+	close(l.count)
+	l.wgCount.Wait()
+	// just to line up the display
+	time.Sleep(time.Second * 1)
+}
+
+func (l *Loader) getContrailNodes() (map[string]Node, error) {
+	var (
+		key     string
+		column1 string
+	)
+	contrailNodes := make(map[string]Node)
+	r := l.session.ScanIterator(`SELECT key, column1 FROM obj_fq_name_table`)
+	for r.Scan(&key, &column1) {
+		parts := strings.Split(column1, ":")
+		uuid := parts[len(parts)-1]
+		contrailNodes[uuid] = Node{UUID: uuid, Type: key}
+	}
+	if err := r.Close(); err != nil {
+		return contrailNodes, err
+	}
+	return contrailNodes, nil
+}
+
+func (l *Loader) getGremlinNodes() (map[string]Node, error) {
+	var (
+		nodes []Node
+	)
+	gremlinNodes := make(map[string]Node)
+	data, err := gremlin.Query(`g.V()`).Exec()
+	if err != nil {
+		return gremlinNodes, err
+	}
+	json.Unmarshal(data, &nodes)
+	for _, node := range nodes {
+		gremlinNodes[node.UUID] = node
+	}
+	return gremlinNodes, nil
+}
+
+func (l *Loader) syncNodes() (err error) {
+	defer close(l.opers)
+
+	var (
+		contrailNodes map[string]Node
+		gremlinNodes  map[string]Node
+	)
+
+	contrailNodes, err = l.getContrailNodes()
+	if err != nil {
+		return err
+	}
+	gremlinNodes, err = l.getGremlinNodes()
+	if err != nil {
+		return err
+	}
+	log.Debugf("Nodes [contrail:%d] [gremlin:%d]",
+		len(contrailNodes), len(gremlinNodes))
+
+	l.links = make(chan Node, len(contrailNodes))
+
+	l.count <- NodeSyncStart
+	for uuid, cNode := range contrailNodes {
+		opers := NewLoaderOps()
+		if gNode, ok := gremlinNodes[uuid]; ok {
+			opers.Add(NodeUpdate, gNode)
+			l.opers <- opers
+		} else {
+			opers.Add(NodeCreate, cNode)
+			l.opers <- opers
+		}
+	}
+	for uuid, gNode := range gremlinNodes {
+		opers := NewLoaderOps()
+		if _, ok := contrailNodes[uuid]; !ok {
+			opers.Add(NodeDelete, gNode)
+			l.opers <- opers
+		}
+	}
+
+	return nil
+}
+
+func (l *Loader) syncLinks() {
+	l.count <- LinkSyncStart
+	defer close(l.opers)
+	for node := range l.links {
+		toAdd, toRemove, err := node.DiffLinks()
+		if err != nil {
+			continue
+		}
+
+		for _, link := range toAdd {
+			opers := NewLoaderOps()
+			if link.SourceType != "" {
+				source := Node{UUID: link.Source, Type: link.SourceType}
+				if exists, _ := source.Exists(); !exists {
+					opers.Add(RawNodeCreate, source)
+				}
+			}
+			if link.TargetType != "" {
+				target := Node{UUID: link.Target, Type: link.TargetType}
+				if exists, _ := target.Exists(); !exists {
+					opers.Add(RawNodeCreate, target)
+				}
+			}
+			opers.Add(LinkCreate, link)
+			l.opers <- opers
+		}
+
+		for _, link := range toRemove {
+			opers := NewLoaderOps()
+			opers.Add(LinkDelete, link)
+			l.opers <- opers
+		}
+	}
+}
+
+func (l *Loader) worker() {
+	defer l.wg.Done()
+	for ops := range l.opers {
+		for _, o := range ops.opers {
+			switch o.oper {
+			case RawNodeCreate:
+				node := o.obj.(Node)
+				if err := node.Create(); err != nil {
+					log.Criticalf("Failed to create node %v : %s", node, err)
+				} else {
+					l.count <- NodeCreate
+				}
+			case NodeCreate:
+				node, err := getNode(l.session, o.obj.(Node).UUID)
+				if err != nil {
+					log.Criticalf("Failed to retrieve node %s: %s", o.obj.(Node).UUID, err)
+				} else {
+					if err := node.Create(); err != nil {
+						log.Criticalf("Failed to create node %v : %s", node, err)
+					} else {
+						l.count <- NodeCreate
+						l.links <- node
+					}
+				}
+			case NodeUpdate:
+				node, err := getNode(l.session, o.obj.(Node).UUID)
+				if err != nil {
+					log.Criticalf("Failed to retrieve node %s: %s", o.obj.(Node).UUID, err)
+				} else {
+					if err := node.Update(); err != nil {
+						log.Criticalf("Failed to update node %v : %s", node, err)
+					} else {
+						l.count <- NodeUpdate
+						l.links <- node
+					}
+				}
+			case NodeDelete:
+				node := o.obj.(Node)
+				if err := node.Delete(); err != nil {
+					log.Criticalf("Failed to delete node %v : %s", node, err)
+				} else {
+					l.count <- NodeDelete
+				}
+			case LinkCreate:
+				link := o.obj.(Link)
+				if err := link.Create(); err != nil {
+					log.Criticalf("Failed to create link %v : %s", link, err)
+				} else {
+					l.count <- LinkCreate
+				}
+			case LinkDelete:
+				link := o.obj.(Link)
+				if err := link.Delete(); err != nil {
+					log.Criticalf("Failed to delete link %v : %s", link, err)
+				} else {
+					l.count <- LinkDelete
+				}
 			}
 		}
 	}
 }
 
-func load(session gockle.Session) {
-	var (
-		uuid    string
-		wgNodes sync.WaitGroup
-		wgLinks sync.WaitGroup
-	)
+func (l *Loader) setupWorkers() {
+	l.opers = make(chan LoaderOps)
+	for w := 1; w <= Workers; w++ {
+		l.wg.Add(1)
+		go l.worker()
+	}
+}
 
-	count := make(map[string]interface{})
-	err := session.ScanMap(`SELECT count(*) FROM obj_fq_name_table`, count)
+func (l *Loader) waitWorkers() {
+	l.wg.Wait()
+	l.count <- SyncEnd
+}
+
+func (l *Loader) Run() {
+	os.Remove(SyncFile)
+	go l.report()
+
+	l.setupWorkers()
+	err := l.syncNodes()
 	if err != nil {
-		log.Fatalf("Failed query: %s", err)
+		log.Criticalf("Sync failed: %s", err)
+		return
 	}
+	l.waitWorkers()
+	// close channel created in syncNodes
+	close(l.links)
 
-	log.Noticef("Processing %d nodes", count["count"].(int64))
+	l.setupWorkers()
+	l.syncLinks()
+	l.waitWorkers()
 
-	uuids := make(chan string)
-	links := make(chan []Link, count["count"].(int64))
+	l.waitCount()
+	ioutil.WriteFile(SyncFile, []byte(""), 0644)
+}
 
-	for w := 1; w <= NodesWorkers; w++ {
-		wgNodes.Add(1)
-		go loadNodes(uuids, links, session, &wgNodes)
-	}
-
-	r := session.ScanIterator(`SELECT column1 FROM obj_fq_name_table`)
-	for r.Scan(&uuid) {
-		parts := strings.Split(uuid, ":")
-		uuid = parts[len(parts)-1]
-		uuids <- uuid
-	}
-	if err := r.Close(); err != nil {
-		log.Critical(err)
-	}
-	close(uuids)
-
-	wgNodes.Wait()
-	close(links)
-	fmt.Println()
-
-	log.Notice("Processing links")
-	for w := 1; w <= LinksWorkers; w++ {
-		wgLinks.Add(1)
-		go loadLinks(links, session, &wgLinks)
-	}
-
-	wgLinks.Wait()
-	fmt.Println()
+func load(session gockle.Session) {
+	loader := NewLoader(session)
+	loader.Run()
 }
 
 func main() {
@@ -661,11 +934,23 @@ func main() {
 		Desc:   "Don't load cassandra DB",
 		EnvVar: "GREMLIN_SYNC_NO_LOAD",
 	})
+	noReload := app.Bool(cli.BoolOpt{
+		Name:   "no-reload",
+		Value:  false,
+		Desc:   "Don't reload cassandra DB",
+		EnvVar: "GREMLIN_SYNC_NO_RELOAD",
+	})
 	noSync := app.Bool(cli.BoolOpt{
 		Name:   "no-sync",
 		Value:  false,
 		Desc:   "Don't sync with RabbitMQ",
 		EnvVar: "GREMLIN_SYNC_NO_SYNC",
+	})
+	reloadInterval := app.Int(cli.IntOpt{
+		Name:   "reload-interval",
+		Value:  30,
+		Desc:   "Time in minutes between reloads",
+		EnvVar: "GREMLIN_SYNC_RELOAD_INTERVAL",
 	})
 	app.Action = func() {
 		var gremlinCluster = make([]string, len(*gremlinSrvs))
@@ -674,7 +959,8 @@ func main() {
 
 		}
 		rabbitURI := fmt.Sprintf("amqp://%s:%s@%s/", *rabbitUser, *rabbitPassword, *rabbitSrv)
-		setup(gremlinCluster, *cassandraSrvs, rabbitURI, *rabbitVHost, *rabbitQueue, *noLoad, *noSync)
+		setup(gremlinCluster, *cassandraSrvs, rabbitURI, *rabbitVHost, *rabbitQueue,
+			*noLoad, *noReload, *noSync, *reloadInterval)
 	}
 	app.Run(os.Args)
 }

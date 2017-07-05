@@ -53,7 +53,7 @@ func TestNodeLink(t *testing.T) {
 
 	uuids = checkNode(t, `g.V(uuid).in('ref').id()`, gremlin.Bind{"uuid": vnUUID})
 
-	assert.Equal(t, len(uuids), 1, "One resource must be linked")
+	assert.Equal(t, 1, len(uuids), "One resource must be linked")
 	assert.Equal(t, vmiUUID, uuids[0], "VMI not correctly linked to VN")
 
 	projectUUID := uuid.NewV4().String()
@@ -72,7 +72,7 @@ func TestNodeLink(t *testing.T) {
 
 	uuids = checkNode(t, `g.V(uuid).both().id()`, gremlin.Bind{"uuid": vmiUUID})
 
-	assert.Equal(t, len(uuids), 2, "Two resources must be linked")
+	assert.Equal(t, 2, len(uuids), "Two resources must be linked")
 }
 
 func TestNodeProperties(t *testing.T) {
@@ -97,7 +97,7 @@ func TestNodeProperties(t *testing.T) {
 		nil,
 	)
 
-	node := getNode(session, nodeUUID)
+	node, _ := getNode(session, nodeUUID)
 	node.Create()
 
 	var uuids []string
@@ -129,15 +129,14 @@ func TestNodeExists(t *testing.T) {
 	}
 	node.Create()
 	exists, _ := node.Exists()
-	assert.Equal(t, exists, true)
+	assert.Equal(t, true, exists)
 
 	node.UUID = uuid.NewV4().String()
 	exists, _ = node.Exists()
-	assert.Equal(t, exists, false)
+	assert.Equal(t, false, exists)
 }
 
 func TestLinkExists(t *testing.T) {
-
 	node1UUID := uuid.NewV4().String()
 	node1 := Node{
 		UUID: node1UUID,
@@ -162,4 +161,45 @@ func TestLinkExists(t *testing.T) {
 	link.Create()
 	exists, _ = link.Exists()
 	assert.Equal(t, exists, true)
+}
+
+func TestLinkDiff(t *testing.T) {
+	node1UUID := uuid.NewV4().String()
+	node1 := Node{
+		UUID: node1UUID,
+		Type: "foo",
+	}
+	node1.Create()
+
+	node2UUID := uuid.NewV4().String()
+	node2 := Node{
+		UUID: node2UUID,
+		Type: "bar",
+		Links: []Link{
+			Link{
+				Source: node2UUID,
+				Target: node1UUID,
+				Type:   "ref",
+			},
+		},
+	}
+	node2.Create()
+
+	toAdd, toRemove, _ := node2.DiffLinks()
+	assert.Equal(t, 1, len(toAdd))
+	assert.Equal(t, 0, len(toRemove))
+
+	node2.CreateLinks()
+
+	toAdd, toRemove, _ = node2.DiffLinks()
+	assert.Equal(t, 0, len(toAdd))
+	assert.Equal(t, 0, len(toRemove))
+
+	node2b := Node{
+		UUID: node2UUID,
+		Type: "bar",
+	}
+	toAdd, toRemove, _ = node2b.DiffLinks()
+	assert.Equal(t, 0, len(toAdd))
+	assert.Equal(t, 1, len(toRemove))
 }
