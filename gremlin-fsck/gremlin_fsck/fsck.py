@@ -43,7 +43,7 @@ class Fsck(Command):
                            type=float)
     json = Option(help='Output logs in json',
                   action='store_true',
-                  default=False)
+                  default=bool(int(os.environ.get('GREMLIN_FSCK_JSON', 0))))
 
     def _check_by_name(self, name):
         c = None
