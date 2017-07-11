@@ -3,6 +3,7 @@ from gremlin_python.process.traversal import within, eq
 from gremlin_python import statics
 
 from contrail_api_cli.utils import printo
+from contrail_api_cli.exceptions import ResourceNotFound
 
 from .utils import to_resources, log_resources, log_json, v_to_r, cmd
 
@@ -24,8 +25,11 @@ def check_vn_with_iip_without_vmi(g):
 
 @log_json
 def clean_vn_with_iip_without_vmi(iip):
-    iip.delete()
-    printo('Deleted %s' % iip)
+    try:
+        iip.delete()
+        printo('Deleted %s' % iip)
+    except ResourceNotFound:
+        return
 
 
 @log_json
@@ -41,8 +45,7 @@ def check_unused_rt(g):
 
 @log_json
 def clean_unused_rt(rt):
-    rt.delete()
-    printo('Deleted %s' % rt)
+    cmd('clean-rt')([rt.path])
 
 
 @log_json

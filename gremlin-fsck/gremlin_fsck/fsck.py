@@ -5,6 +5,7 @@ import inspect
 from time import time
 import gevent
 import socket
+from six import text_type
 
 from tornado.httpclient import HTTPError
 
@@ -95,12 +96,11 @@ class Fsck(Command):
                     continue
                 try:
                     clean = self._clean_by_name(check_name)
-                    utils.log('Cleaning...')
-                    for r_ in r:
-                        clean(r_)
-                    utils.log('Clean done.')
-                except CommandError as e:
-                    utils.log(e)
-                    pass
+                except CommandError:
+                    continue
+                utils.log('Cleaning...')
+                for r_ in r:
+                    clean(r_)
+                utils.log('Clean done.')
         end = time() - start
         utils.log('Checks done in %ss' % end)
