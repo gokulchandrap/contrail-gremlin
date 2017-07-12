@@ -45,6 +45,8 @@ class Fsck(Command):
     json = Option(help='Output logs in json',
                   action='store_true',
                   default=bool(int(os.environ.get('GREMLIN_FSCK_JSON', 0))))
+    zk_server = Option(help="Zookeeper server (default: %(default)s)",
+                       default=os.environ.get('GREMLIN_FSCK_ZK_SERVER', 'localhost:2181'))
 
     def _check_by_name(self, name):
         c = None
@@ -68,8 +70,10 @@ class Fsck(Command):
             raise CommandError("Can't find %s clean method" % name)
         return c
 
-    def __call__(self, gremlin_server=None, checks=None, clean=False, loop=False, loop_interval=None, json=False):
+    def __call__(self, gremlin_server=None, checks=None, clean=False,
+                 loop=False, loop_interval=None, json=False, zk_server=False):
         utils.JSON_OUTPUT = json
+        utils.ZK_SERVER = zk_server
         graph = Graph()
         try:
             self.g = graph.traversal().withRemote(DriverRemoteConnection('ws://%s/gremlin' % gremlin_server, 'g'))
@@ -99,8 +103,11 @@ class Fsck(Command):
                 except CommandError:
                     continue
                 utils.log('Cleaning...')
-                for r_ in r:
-                    clean(r_)
-                utils.log('Clean done.')
+                try:
+                    clean(r)
+                except CommandError as e:
+                    utils.log('Clean failed: %s' % text_type(e))
+                else:
+                    utils.log('Clean done')
         end = time() - start
         utils.log('Checks done in %ss' % end)

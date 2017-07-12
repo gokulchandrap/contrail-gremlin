@@ -5,7 +5,8 @@ from gremlin_python import statics
 from contrail_api_cli.utils import printo
 from contrail_api_cli.exceptions import ResourceNotFound
 
-from .utils import to_resources, log_resources, log_json, v_to_r, cmd
+from .utils import to_resources, log_resources, log_json, count_lines, v_to_r, cmd
+from . import utils
 
 
 statics.default_lambda_language = 'gremlin-groovy'
@@ -24,12 +25,14 @@ def check_vn_with_iip_without_vmi(g):
 
 
 @log_json
-def clean_vn_with_iip_without_vmi(iip):
-    try:
-        iip.delete()
-        printo('Deleted %s' % iip)
-    except ResourceNotFound:
-        return
+@count_lines
+def clean_vn_with_iip_without_vmi(iips):
+    for iip in iips:
+        try:
+            iip.delete()
+            printo('Deleted %s' % iip)
+        except ResourceNotFound:
+            continue
 
 
 @log_json
@@ -44,8 +47,9 @@ def check_unused_rt(g):
 
 
 @log_json
-def clean_unused_rt(rt):
-    cmd('clean-rt')([rt.path])
+@count_lines
+def clean_unused_rt(rts):
+    cmd('clean-route-target')(paths=[rt.path for rt in rts], zk_server=utils.ZK_SERVER)
 
 
 @log_json
@@ -60,22 +64,31 @@ def check_iip_without_instance_ip_address(g):
 
 
 @log_json
-def clean_iip_without_instance_ip_address(iip):
-    if not iip.fetch().refs.virtual_machine_interface:
-        printo("%s isn't link to any vmi" % iip)
-        iip.delete()
-        printo('Deleted %s' % iip)
-        return
-    vmi_vm = False
-    for vmi in iip.refs.virtual_machine_interface:
-        if vmi.fetch().refs.virtual_machine:
-            vmi_vm = True
-    if vmi_vm is False:
-        printo("%s vmi isn't linked to any vm")
-        iip.delete()
-        printo('Deleted %s' % iip)
-        vmi.delete()
-        printo('Deleted %s' % vmi)
+@count_lines
+def clean_iip_without_instance_ip_address(iips):
+    for iip in iips:
+        if not iip.fetch().refs.virtual_machine_interface:
+            try:
+                iip.delete()
+                printo('Deleted %s' % iip)
+            except ResourceNotFound:
+                continue
+            return
+        vmi_vm = False
+        for vmi in iip.refs.virtual_machine_interface:
+            if vmi.fetch().refs.virtual_machine:
+                vmi_vm = True
+        if vmi_vm is False:
+            try:
+                iip.delete()
+                printo('Deleted %s' % iip)
+            except ResourceNotFound:
+                pass
+            try:
+                vmi.delete()
+                printo('Deleted %s' % vmi)
+            except ResourceNotFound:
+                pass
 
 
 @log_json
@@ -89,8 +102,9 @@ def check_snat_without_lr(g):
 
 
 @log_json
-def clean_snat_without_lr(si):
-    cmd('clean-stale-si')([si.path])
+@count_lines
+def clean_snat_without_lr(sis):
+    cmd('clean-stale-si')(paths=[si.path for si in sis])
 
 
 @log_json
@@ -106,8 +120,9 @@ def check_lbaas_without_lbpool(g):
 
 
 @log_json
-def clean_lbaas_without_lbpool(si):
-    cmd('clean-stale-si')([si.path])
+@count_lines
+def clean_lbaas_without_lbpool(sis):
+    cmd('clean-stale-si')(paths=[si.path for si in sis])
 
 
 @log_json
@@ -121,8 +136,9 @@ def check_lbaas_without_vip(g):
 
 
 @log_json
-def clean_lbaas_without_vip(si):
-    cmd('clean-stale-si')([si.path])
+@count_lines
+def clean_lbaas_without_vip(sis):
+    cmd('clean-stale-si')(paths=[si.path for si in sis])
 
 
 @log_json
@@ -148,9 +164,14 @@ def check_acl_without_sg(g):
 
 
 @log_json
-def clean_acl_without_sg(acl):
-    acl.delete()
-    printo('Deleted %s' % acl)
+@count_lines
+def clean_acl_without_sg(acls):
+    for acl in acls:
+        try:
+            acl.delete()
+            printo('Deleted %s' % acl)
+        except ResourceNotFound:
+            continue
 
 
 @log_json
@@ -201,8 +222,9 @@ def check_duplicate_default_sg(g):
 
 
 @log_json
-def clean_duplicate_default_sg(p):
-    cmd('fix-sg')(paths=[p.path], yes=True)
+@count_lines
+def clean_duplicate_default_sg(projects):
+    cmd('fix-sg')(paths=[p.path for p in projects], yes=True)
 
 
 @log_json

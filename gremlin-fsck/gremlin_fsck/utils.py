@@ -5,8 +5,10 @@ from cStringIO import StringIO
 import sys
 from six import text_type
 import time
+import logging
 
 from gremlin_python.process.graph_traversal import id, label, union, values
+from gremlin_python.process.traversal import lt
 
 from contrail_api_cli.resource import Resource
 from contrail_api_cli.exceptions import CommandError
@@ -14,8 +16,10 @@ from contrail_api_cli.utils import printo
 from contrail_api_cli.manager import CommandManager
 
 
-CommandManager(load_default=False).load_namespace('contrail_api_cli.clean')
+cmd_mgr = CommandManager(load_default=False)
+cmd_mgr.load_namespace('contrail_api_cli.clean')
 JSON_OUTPUT = False
+ZK_SERVER = 'localhost:2181'
 
 
 def log(string):
@@ -27,7 +31,10 @@ def log(string):
 def to_resources(fun):
     @functools.wraps(fun)
     def wrapper(*args):
+        now = int(time.time())
         t = fun(*args)
+        # take only resources updated at least 5min ago
+        t = t.has('updated', lt(now - 5 * 60))
         r = t.map(union(label(), id(), values('fq_name')).fold()).toList()
         # convert gremlin result in [Resource]
         r = [Resource(res_type.replace('_', '-'), uuid=uuid["@value"], fq_name=fq_name)
@@ -74,12 +81,46 @@ def log_json(fun):
         end = time.time()
         if JSON_OUTPUT:
             sys.stdout = old_stdout
-            total = 1
-            if isinstance(r, list):
+            if r == -1:
+                total = -1
+            elif isinstance(r, list):
                 total = len(r)
+            else:
+                total = 1
             printo(json_log(fun, total, my_stdout.getvalue(), (end - start) * 1000.0))
             my_stdout.close()
         return r
+    return wrapper
+
+
+def count_lines(fun):
+    @functools.wraps(fun)
+    def wrapper(*args):
+        old_stdout = sys.stdout
+        sys.stdout = my_stdout = StringIO()
+        root = logging.getLogger()
+        ch = logging.StreamHandler(my_stdout)
+        ch.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        ch.setFormatter(formatter)
+        root.addHandler(ch)
+        try:
+            fun(*args)
+        except CommandError as e:
+            total = -1
+            sys.stdout = old_stdout
+            root.removeHandler(ch)
+            output = my_stdout.getvalue()
+            my_stdout.close()
+            raise CommandError("%s:\n%s" % (text_type(e), output))
+        if total != -1:
+            total = my_stdout.count('\n')
+            sys.stdout = old_stdout
+            root.removeHandler(ch)
+            printo(my_stdout.getvalue())
+            my_stdout.close()
+            # return a list for log_json count
+            return range(1, total)
     return wrapper
 
 
@@ -90,4 +131,4 @@ def v_to_r(v):
 
 
 def cmd(name):
-    return CommandManager(load_default=False).get(name)
+    return cmd_mgr.get(name)

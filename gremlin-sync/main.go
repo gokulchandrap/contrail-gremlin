@@ -105,12 +105,20 @@ type Node struct {
 	Type       string                 `json:"label"`
 	Properties map[string]interface{} `json:"properties"`
 	Links      []Link
+	Created    int64
+	Updated    int64
 }
 
 func (n Node) createUpdateQuery(base string) ([]string, error) {
 	var queries []string
 	if n.Type == "" {
 		return nil, errors.New("Node has no type, skip.")
+	}
+	if n.Created != 0 {
+		base += fmt.Sprintf(`.property("created", %d)`, n.Created)
+	}
+	if n.Updated != 0 {
+		base += fmt.Sprintf(`.property("updated", %d)`, n.Updated)
 	}
 	encoder := GremlinPropertiesEncoder{
 		stringReplacer: strings.NewReplacer(`"`, `\"`, "\n", `\n`, "\r", ``, `$`, `\$`),
@@ -585,6 +593,20 @@ func getNode(session gockle.Session, uuid string) (Node, error) {
 			}
 		}
 	}
+
+	if created, ok := node.Properties["id_perms.created"]; ok {
+		created := created.([]interface{})[0]
+		if time, err := time.Parse(time.RFC3339Nano, created.(string)+`Z`); err == nil {
+			node.Created = time.Unix()
+		}
+	}
+	if updated, ok := node.Properties["id_perms.last_modified"]; ok {
+		updated := updated.([]interface{})[0]
+		if time, err := time.Parse(time.RFC3339Nano, updated.(string)+`Z`); err == nil {
+			node.Updated = time.Unix()
+		}
+	}
+
 	return node, nil
 }
 
