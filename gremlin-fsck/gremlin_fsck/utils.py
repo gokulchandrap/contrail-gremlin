@@ -109,23 +109,22 @@ def count_lines(fun):
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         ch.setFormatter(formatter)
         root.addHandler(ch)
-        try:
-            fun(*args)
-        except CommandError as e:
-            total = -1
+
+        def cleanup():
             sys.stdout = old_stdout
             root.removeHandler(ch)
             output = my_stdout.getvalue()
             my_stdout.close()
-            raise CommandError("%s:\n%s" % (text_type(e), output))
-        if total != -1:
-            total = my_stdout.count('\n')
-            sys.stdout = old_stdout
-            root.removeHandler(ch)
-            printo(my_stdout.getvalue())
-            my_stdout.close()
+            return output
+
+        try:
+            fun(*args)
+            output = cleanup()
             # return a list for log_json count
-            return range(1, total)
+            return range(1, output.count('\n'))
+        except CommandError as e:
+            raise CommandError("%s:\n%s" % (text_type(e), cleanup()))
+
     return wrapper
 
 
