@@ -155,11 +155,35 @@ def check_ri_without_rt(g):
 @log_json
 @log_resources
 @to_resources
+def check_rt_without_vn(g):
+    """routing-instance that doesn't have any virtual-network
+    """
+    return g.V().hasLabel('routing_instance').where(
+        __.in_('parent').hasNot('fq_name')
+    )
+
+
+@log_json
+@count_lines
+def clean_rt_without_vn(ris):
+    # This will leave RTs, but check_unused_rt will remove
+    # them later
+    for ri in ris:
+        try:
+            ri.delete()
+            printo('Deleted %s' % ri)
+        except ResourceNotFound:
+            pass
+
+
+@log_json
+@log_resources
+@to_resources
 def check_acl_without_sg(g):
     """access-control-list without security-group
     """
     return g.V().hasLabel('access_control_list').where(
-        __.inE().count().is_(eq(0))
+        __.in_().hasNot('fq_name')
     )
 
 
