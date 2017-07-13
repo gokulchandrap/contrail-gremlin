@@ -49,7 +49,9 @@ def check_unused_rt(g):
 @log_json
 @count_lines
 def clean_unused_rt(rts):
-    cmd('clean-route-target')(paths=[rt.path for rt in rts], zk_server=utils.ZK_SERVER)
+    cmd('clean-route-target')(paths=[rt.path for rt in rts],
+                              zk_server=utils.ZK_SERVER,
+                              exclude=[])
 
 
 @log_json
