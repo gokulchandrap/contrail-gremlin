@@ -35,11 +35,16 @@ def to_resources(fun):
         t = fun(*args)
         # take only resources updated at least 5min ago
         t = t.has('updated', lt(now - 5 * 60))
+        # we should be able to fold() fq_name: https://issues.apache.org/jira/browse/TINKERPOP-1711
         r = t.map(union(label(), id(), values('fq_name')).fold()).toList()
         # convert gremlin result in [Resource]
-        r = [Resource(res_type.replace('_', '-'), uuid=uuid["@value"], fq_name=fq_name)
-             for res_type, uuid, fq_name in r]
-        return r
+        resources = []
+        for r_ in r:
+            res_type = r_[0].replace('_', '-')
+            uuid = r_[1]["@value"]
+            fq_name = r_[2:]
+            resources.append(Resource(res_type, uuid=uuid, fq_name=fq_name))
+        return resources
     return wrapper
 
 
