@@ -120,6 +120,7 @@ def count_lines(fun):
         try:
             fun(*args)
             output = cleanup()
+            printo(output)
             # return a list for log_json count
             return range(1, output.count('\n'))
         except CommandError as e:
