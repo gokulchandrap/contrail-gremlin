@@ -3,23 +3,27 @@ dist: trusty
 before_install:
     - wget http://www-eu.apache.org/dist/tinkerpop/3.2.5/apache-tinkerpop-gremlin-server-3.2.5-bin.zip
     - unzip apache-tinkerpop-gremlin-server-3.2.5-bin.zip
-    - cp conf/* apache-tinkerpop-gremlin-server-3.2.5/conf
-    - cd apache-tinkerpop-gremlin-server-3.2.5
+    - cp ${TRAVIS_BUILD_DIR}/conf/* ${TRAVIS_BUILD_DIR}/apache-tinkerpop-gremlin-server-3.2.5/conf
+    - cd ${TRAVIS_BUILD_DIR}/apache-tinkerpop-gremlin-server-3.2.5
     - bin/gremlin-server.sh conf/gremlin-server-contrail.yaml &
-    - cd ../gremlin-sync
+    - cd ${TRAVIS_BUILD_DIR}
 
 script:
+    - cd ${TRAVIS_BUILD_DIR}/gremlin-sync
     - go test -v ./...
     - go build -v
+    - cd ${TRAVIS_BUILD_DIR}/gremlin-probe
+    - go build -v
+    - cd ${TRAVIS_BUILD_DIR}
 
 after_success:
     - echo "Pushing binaries to contrail-gremlin-binaries repo"
-    - export BINARY_NAME=gremlin-sync
     - export BINARIES_REPO=https://eonpatapon:${GITHUB_TOKEN}@github.com/eonpatapon/contrail-gremlin-binaries
     - export COMMIT_ID=$(git rev-parse HEAD)
     - git clone -q ${BINARIES_REPO}
-    - cp ${BINARY_NAME} ./contrail-gremlin-binaries
-    - cd contrail-gremlin-binaries
+    - cp ${TRAVIS_BUILD_DIR}/gremlin-sync/gremlin-sync ${TRAVIS_BUILD_DIR}/contrail-gremlin-binaries
+    - cp ${TRAVIS_BUILD_DIR}/gremlin-probe/gremlin-probe ${TRAVIS_BUILD_DIR}/contrail-gremlin-binaries
+    - cd ${TRAVIS_BUILD_DIR}/contrail-gremlin-binaries
     - git add .
     - git -c user.name='Travis' -c user.email='Travis' commit -m "contrail-gremlin commit ${COMMIT_ID}"
     - git push -f origin master
