@@ -97,7 +97,7 @@ func TestNodeProperties(t *testing.T) {
 		nil,
 	)
 
-	node, _ := getNode(session, nodeUUID)
+	node, _ := getContrailNode(session, nodeUUID)
 	node.Create()
 
 	var uuids []string
@@ -137,6 +137,11 @@ func TestNodeExists(t *testing.T) {
 }
 
 func TestLinkExists(t *testing.T) {
+	err := setupGremlin([]string{"ws://localhost:8182/gremlin"})
+	if err != nil {
+		t.Errorf("Failed to connect to gremlin server")
+	}
+
 	node1UUID := uuid.NewV4().String()
 	node1 := Node{
 		UUID: node1UUID,
@@ -164,6 +169,11 @@ func TestLinkExists(t *testing.T) {
 }
 
 func TestLinkDiff(t *testing.T) {
+	err := setupGremlin([]string{"ws://localhost:8182/gremlin"})
+	if err != nil {
+		t.Errorf("Failed to connect to gremlin server")
+	}
+
 	node1UUID := uuid.NewV4().String()
 	node1 := Node{
 		UUID: node1UUID,

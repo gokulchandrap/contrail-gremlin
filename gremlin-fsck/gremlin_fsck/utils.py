@@ -8,7 +8,6 @@ import time
 import logging
 
 from gremlin_python.process.graph_traversal import id, label, union, values
-from gremlin_python.process.traversal import lt
 
 from contrail_api_cli.resource import Resource
 from contrail_api_cli.exceptions import CommandError
@@ -31,10 +30,7 @@ def log(string):
 def to_resources(fun):
     @functools.wraps(fun)
     def wrapper(*args):
-        now = int(time.time())
         t = fun(*args)
-        # take only resources updated at least 5min ago
-        t = t.has('updated', lt(now - 5 * 60))
         # we should be able to fold() fq_name: https://issues.apache.org/jira/browse/TINKERPOP-1711
         r = t.map(union(label(), id(), values('fq_name')).fold()).toList()
         # convert gremlin result in [Resource]

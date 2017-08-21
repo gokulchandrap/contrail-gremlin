@@ -107,6 +107,17 @@ type Node struct {
 	Links      []Link
 	Created    int64
 	Updated    int64
+	Deleted    int64
+}
+
+func (n *Node) SetDeleted() error {
+	n.Deleted = time.Now().Unix()
+	_, err := gremlin.Query("g.V(uuid).property('deleted', time)").Bindings(
+		gremlin.Bind{
+			"uuid": n.UUID,
+			"time": n.Deleted,
+		}).Exec()
+	return err
 }
 
 func (n Node) createUpdateQuery(base string) ([]string, error) {
@@ -120,6 +131,7 @@ func (n Node) createUpdateQuery(base string) ([]string, error) {
 	if n.Updated != 0 {
 		base += fmt.Sprintf(`.property("updated", %d)`, n.Updated)
 	}
+	base += fmt.Sprintf(`.property("deleted", %d)`, n.Deleted)
 	encoder := GremlinPropertiesEncoder{
 		stringReplacer: strings.NewReplacer(`"`, `\"`, "\n", `\n`, "\r", ``, `$`, `\$`),
 	}
@@ -425,7 +437,7 @@ func synchronize(session gockle.Session, msgs <-chan amqp.Delivery) {
 		json.Unmarshal(d.Body, &n)
 		switch n.Oper {
 		case "CREATE":
-			node, err := getNode(session, n.UUID)
+			node, err := getContrailNode(session, n.UUID)
 			if err != nil {
 				node.Create()
 				node.CreateLinks()
@@ -433,7 +445,7 @@ func synchronize(session gockle.Session, msgs <-chan amqp.Delivery) {
 			}
 			d.Ack(false)
 		case "UPDATE":
-			node, err := getNode(session, n.UUID)
+			node, err := getContrailNode(session, n.UUID)
 			if err != nil {
 				node.Update()
 				node.UpdateLinks()
@@ -441,9 +453,11 @@ func synchronize(session gockle.Session, msgs <-chan amqp.Delivery) {
 			}
 			d.Ack(false)
 		case "DELETE":
-			node := Node{UUID: n.UUID, Type: n.Type}
-			node.Delete()
-			log.Debugf("%s/%s deleted", n.Type, n.UUID)
+			node := Node{UUID: n.UUID}
+			err := node.SetDeleted()
+			if err != nil {
+				log.Debugf("%s/%s deleted", n.Type, n.UUID)
+			}
 			d.Ack(false)
 		default:
 			log.Errorf("Notification not handled: %s", n)
@@ -541,7 +555,7 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 	}
 }
 
-func getNode(session gockle.Session, uuid string) (Node, error) {
+func getContrailNode(session gockle.Session, uuid string) (Node, error) {
 	var (
 		column1   string
 		valueJSON []byte
@@ -716,7 +730,7 @@ func (l *Loader) getGremlinNodes() (map[string]Node, error) {
 		nodes []Node
 	)
 	gremlinNodes := make(map[string]Node)
-	data, err := gremlin.Query(`g.V()`).Exec()
+	data, err := gremlin.Query(`g.V().has('deleted', 0)`).Exec()
 	if err != nil {
 		return gremlinNodes, err
 	}
@@ -743,7 +757,7 @@ func (l *Loader) syncNodes() (err error) {
 	if err != nil {
 		return err
 	}
-	log.Debugf("Nodes [contrail:%d] [gremlin:%d]",
+	log.Debugf("Active nodes [contrail:%d] [gremlin:%d]",
 		len(contrailNodes), len(gremlinNodes))
 
 	l.links = make(chan Node, len(contrailNodes))
@@ -818,7 +832,7 @@ func (l *Loader) worker() {
 					l.count <- NodeCreate
 				}
 			case NodeCreate:
-				node, err := getNode(l.session, o.obj.(Node).UUID)
+				node, err := getContrailNode(l.session, o.obj.(Node).UUID)
 				if err != nil {
 					log.Criticalf("Failed to retrieve node %s: %s", o.obj.(Node).UUID, err)
 				} else {
@@ -830,7 +844,7 @@ func (l *Loader) worker() {
 					}
 				}
 			case NodeUpdate:
-				node, err := getNode(l.session, o.obj.(Node).UUID)
+				node, err := getContrailNode(l.session, o.obj.(Node).UUID)
 				if err != nil {
 					log.Criticalf("Failed to retrieve node %s: %s", o.obj.(Node).UUID, err)
 				} else {
@@ -843,7 +857,8 @@ func (l *Loader) worker() {
 				}
 			case NodeDelete:
 				node := o.obj.(Node)
-				if err := node.Delete(); err != nil {
+				err := node.SetDeleted()
+				if err != nil {
 					log.Criticalf("Failed to delete node %v : %s", node, err)
 				} else {
 					l.count <- NodeDelete
@@ -923,7 +938,7 @@ func main() {
 	})
 	rabbitSrv := app.String(cli.StringOpt{
 		Name:   "rabbit",
-		Value:  "localhost:5276",
+		Value:  "localhost:5672",
 		Desc:   "host:port of rabbitmq server",
 		EnvVar: "GREMLIN_SYNC_RABBIT_SERVER",
 	})

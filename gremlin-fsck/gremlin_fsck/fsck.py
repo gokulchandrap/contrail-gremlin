@@ -2,7 +2,7 @@ from __future__ import unicode_literals
 import os
 import sys
 import inspect
-from time import time
+import time
 import gevent
 import socket
 from six import text_type
@@ -14,6 +14,9 @@ from contrail_api_cli.exceptions import CommandError
 
 from gremlin_python.structure.graph import Graph
 from gremlin_python.driver.driver_remote_connection import DriverRemoteConnection
+from gremlin_python.process.strategies import SubgraphStrategy
+from gremlin_python.process.traversal import lt
+from gremlin_python.process.graph_traversal import __
 
 from . import utils
 from .checks import *
@@ -74,15 +77,24 @@ class Fsck(Command):
                  loop=False, loop_interval=None, json=False, zk_server=False):
         utils.JSON_OUTPUT = json
         utils.ZK_SERVER = zk_server
-        graph = Graph()
-        try:
-            self.g = graph.traversal().withRemote(DriverRemoteConnection('ws://%s/gremlin' % gremlin_server, 'g'))
-        except (HTTPError, socket.error) as e:
-            raise CommandError('Failed to connect to Gremlin server: %s' % e)
+        self.gremlin_server = gremlin_server
         if loop is True:
             self.run_loop(checks, clean, loop_interval)
         else:
             self.run(checks, clean)
+
+    def get_graph(self):
+        time_point = int(time.time()) - 5 * 60
+        graph = Graph()
+        try:
+            # take only resources updated at least 5min ago and not deleted
+            return graph.traversal().withRemote(
+                DriverRemoteConnection('ws://%s/gremlin' % self.gremlin_server, 'g')
+            ).withStrategies(
+                SubgraphStrategy(vertices=__.has('updated', lt(time_point)).has('deleted', 0))
+            )
+        except (HTTPError, socket.error) as e:
+            raise CommandError('Failed to connect to Gremlin server: %s' % e)
 
     def run_loop(self, checks, clean, loop_interval):
         while True:
@@ -90,11 +102,12 @@ class Fsck(Command):
             gevent.sleep(loop_interval)
 
     def run(self, checks, clean):
+        g = self.get_graph()
         utils.log('Running checks...')
-        start = time()
+        start = time.time()
         for check_name in checks:
             check = self._check_by_name(check_name)
-            r = check(self.g)
+            r = check(g)
             if len(r) > 0:
                 if clean is False:
                     continue
@@ -109,5 +122,5 @@ class Fsck(Command):
                     utils.log('Clean failed: %s' % text_type(e))
                 else:
                     utils.log('Clean done')
-        end = time() - start
+        end = time.time() - start
         utils.log('Checks done in %ss' % end)
