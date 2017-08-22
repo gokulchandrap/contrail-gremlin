@@ -439,6 +439,8 @@ func synchronize(session gockle.Session, msgs <-chan amqp.Delivery) {
 		case "CREATE":
 			node, err := getContrailNode(session, n.UUID)
 			if err != nil {
+				log.Errorf("%s/%s create failed: %s", n.Type, n.UUID, err)
+			} else {
 				node.Create()
 				node.CreateLinks()
 				log.Debugf("%s/%s created", n.Type, n.UUID)
@@ -447,6 +449,8 @@ func synchronize(session gockle.Session, msgs <-chan amqp.Delivery) {
 		case "UPDATE":
 			node, err := getContrailNode(session, n.UUID)
 			if err != nil {
+				log.Errorf("%s/%s update failed: %s", n.Type, n.UUID, err)
+			} else {
 				node.Update()
 				node.UpdateLinks()
 				log.Debugf("%s/%s updated", n.Type, n.UUID)
@@ -456,6 +460,8 @@ func synchronize(session gockle.Session, msgs <-chan amqp.Delivery) {
 			node := Node{UUID: n.UUID}
 			err := node.SetDeleted()
 			if err != nil {
+				log.Errorf("%s/%s delete failed: %s", n.Type, n.UUID, err)
+			} else {
 				log.Debugf("%s/%s deleted", n.Type, n.UUID)
 			}
 			d.Ack(false)
