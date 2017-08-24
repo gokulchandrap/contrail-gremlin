@@ -106,7 +106,7 @@ func TestNodeProperties(t *testing.T) {
 	assert.Equal(t, nodeUUID, uuids[0])
 	uuids = checkNode(t, `g.V(uuid).has('string', 'str').id()`, gremlin.Bind{"uuid": nodeUUID})
 	assert.Equal(t, nodeUUID, uuids[0])
-	uuids = checkNode(t, `g.V(uuid).has('list', 'a').has('list', 'b').has('list', 'c').id()`, gremlin.Bind{"uuid": nodeUUID})
+	uuids = checkNode(t, `g.V(uuid).has('list', ['a', 'b', 'c']).id()`, gremlin.Bind{"uuid": nodeUUID})
 	assert.Equal(t, nodeUUID, uuids[0])
 	uuids = checkNode(t, `g.V(uuid).has('object.bool', false).id()`, gremlin.Bind{"uuid": nodeUUID})
 	assert.Equal(t, nodeUUID, uuids[0])
