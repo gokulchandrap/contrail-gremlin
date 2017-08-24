@@ -370,10 +370,15 @@ func (n Node) AddProperties(prefix string, c *gabs.Container) {
 }
 
 func (n Node) AddProperty(prefix string, value interface{}) {
-	if _, ok := n.Properties[prefix]; ok {
-		n.Properties[prefix] = append(n.Properties[prefix].([]interface{}), value)
+	if val, ok := n.Properties[prefix]; ok {
+		switch val.(type) {
+		case []interface{}:
+			n.Properties[prefix] = append(n.Properties[prefix].([]interface{}), value)
+		default:
+			n.Properties[prefix] = []interface{}{val, value}
+		}
 	} else {
-		n.Properties[prefix] = []interface{}{value}
+		n.Properties[prefix] = value
 	}
 }
 
@@ -615,13 +620,11 @@ func getContrailNode(session gockle.Session, uuid string) (Node, error) {
 	}
 
 	if created, ok := node.Properties["id_perms.created"]; ok {
-		created := created.([]interface{})[0]
 		if time, err := time.Parse(time.RFC3339Nano, created.(string)+`Z`); err == nil {
 			node.Created = time.Unix()
 		}
 	}
 	if updated, ok := node.Properties["id_perms.last_modified"]; ok {
-		updated := updated.([]interface{})[0]
 		if time, err := time.Parse(time.RFC3339Nano, updated.(string)+`Z`); err == nil {
 			node.Updated = time.Unix()
 		}
@@ -1052,16 +1055,19 @@ func (p *GremlinPropertiesEncoder) EncodeMap(m map[string]interface{}) error {
 func (p *GremlinPropertiesEncoder) EncodeKVPair(k string, v interface{}) error {
 	switch v.(type) {
 	case []interface{}:
-		for _, i := range v.([]interface{}) {
-			p.WriteString(".property(list,")
-			p.EncodeString(k)
-			p.WriteByte(',')
-			err := p.Encode(i)
+		p.WriteString(".property(")
+		p.EncodeString(k)
+		p.WriteString(", [")
+		for i, val := range v.([]interface{}) {
+			if i > 0 {
+				p.WriteByte(',')
+			}
+			err := p.Encode(val)
 			if err != nil {
 				return err
 			}
-			p.WriteString(")")
 		}
+		p.WriteString("])")
 	default:
 		p.WriteString(".property(")
 		p.EncodeString(k)
