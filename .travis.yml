@@ -1,7 +1,7 @@
 dist: trusty
 
 before_install:
-    - wget http://www-eu.apache.org/dist/tinkerpop/3.2.5/apache-tinkerpop-gremlin-server-3.2.5-bin.zip
+    - wget https://archive.apache.org/dist/tinkerpop/3.2.5/apache-tinkerpop-gremlin-server-3.2.5-bin.zip
     - unzip apache-tinkerpop-gremlin-server-3.2.5-bin.zip
     - cp ${TRAVIS_BUILD_DIR}/conf/* ${TRAVIS_BUILD_DIR}/apache-tinkerpop-gremlin-server-3.2.5/conf
     - cd ${TRAVIS_BUILD_DIR}/apache-tinkerpop-gremlin-server-3.2.5
@@ -21,12 +21,15 @@ after_success:
     - export BINARIES_REPO=https://eonpatapon:${GITHUB_TOKEN}@github.com/eonpatapon/contrail-gremlin-binaries
     - export COMMIT_ID=$(git rev-parse HEAD)
     - git clone -q ${BINARIES_REPO}
+    - cd contrail-gremlin-binaries
+    - git checkout -B ${TRAVIS_BRANCH} --track origin/${TRAVIS_BRANCH} || git checkout -b ${TRAVIS_BRANCH}
+    - cd ${TRAVIS_BUILD_DIR}
     - cp ${TRAVIS_BUILD_DIR}/gremlin-sync/gremlin-sync ${TRAVIS_BUILD_DIR}/contrail-gremlin-binaries
     - cp ${TRAVIS_BUILD_DIR}/gremlin-probe/gremlin-probe ${TRAVIS_BUILD_DIR}/contrail-gremlin-binaries
     - cd ${TRAVIS_BUILD_DIR}/contrail-gremlin-binaries
     - git add .
     - git -c user.name='Travis' -c user.email='Travis' commit -m "contrail-gremlin commit ${COMMIT_ID}"
-    - git push -f origin master
+    - git push -f origin ${TRAVIS_BRANCH}
 
 language: go
 go:
