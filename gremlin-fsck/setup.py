@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 install_requires = [
-    'gremlinpython',
+    'gremlinpython==3.2.5',
 ]
 
 test_requires = []
