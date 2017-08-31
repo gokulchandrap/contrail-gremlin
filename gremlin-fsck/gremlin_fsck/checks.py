@@ -99,7 +99,7 @@ def clean_iip_without_instance_ip_address(iips):
 def check_snat_without_lr(g):
     """Snat SI without any logical-router
     """
-    return g.V().hasLabel("service_template").has("name", "netns-snat-template") \
+    return g.V().hasLabel("service_template").has("display_name", "netns-snat-template") \
         .in_().hasLabel("service_instance").not_(__.in_().hasLabel("logical_router"))
 
 
@@ -116,7 +116,7 @@ def check_lbaas_without_lbpool(g):
     """LBaaS SI without any loadbalancer-pool
     """
     return g.V().hasLabel("service_template") \
-        .has("name", "haproxy-loadbalancer-template") \
+        .has("display_name", "haproxy-loadbalancer-template") \
         .in_().hasLabel("service_instance") \
         .not_(__.in_().hasLabel("loadbalancer_pool"))
 
