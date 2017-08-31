@@ -157,7 +157,7 @@ def check_ri_without_rt(g):
 @log_json
 @log_resources
 @to_resources
-def check_rt_without_vn(g):
+def check_ri_without_vn(g):
     """routing-instance that doesn't have any virtual-network
     """
     return g.V().hasLabel('routing_instance').where(
@@ -167,7 +167,7 @@ def check_rt_without_vn(g):
 
 @log_json
 @count_lines
-def clean_rt_without_vn(ris):
+def clean_ri_without_vn(ris):
     # This will leave RTs, but check_unused_rt will remove
     # them later
     for ri in ris:
