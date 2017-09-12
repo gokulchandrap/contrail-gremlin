@@ -436,7 +436,7 @@ func setupRabbit(rabbitURI string, rabbitVHost string, rabbitQueue string) (*amq
 	return conn, ch, msgs
 }
 
-func synchronize(session gockle.Session, msgs <-chan amqp.Delivery) {
+func synchronize(session gockle.Session, msgs <-chan amqp.Delivery, historize bool) {
 	for d := range msgs {
 		n := Notification{}
 		json.Unmarshal(d.Body, &n)
@@ -463,7 +463,12 @@ func synchronize(session gockle.Session, msgs <-chan amqp.Delivery) {
 			d.Ack(false)
 		case "DELETE":
 			node := Node{UUID: n.UUID}
-			err := node.SetDeleted()
+			var err error
+			if historize {
+				err = node.SetDeleted()
+			} else {
+				err = node.Delete()
+			}
 			if err != nil {
 				log.Errorf("%s/%s delete failed: %s", n.Type, n.UUID, err)
 			} else {
@@ -512,7 +517,7 @@ func setupCassandra(cassandraCluster []string) (gockle.Session, error) {
 	return mockableSession, err
 }
 
-func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string, rabbitVHost string, rabbitQueue string, noLoad bool, noReload bool, noSync bool, reloadInterval int) {
+func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string, rabbitVHost string, rabbitQueue string, noLoad bool, noReload bool, noSync bool, reloadInterval int, historize bool) {
 	var (
 		conn    *amqp.Connection
 		msgs    <-chan amqp.Delivery
@@ -541,7 +546,7 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 	}
 
 	if noLoad == false {
-		load(session)
+		load(session, historize)
 	}
 
 	if noReload == false {
@@ -549,14 +554,14 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 		ticker := time.NewTicker(time.Minute * time.Duration(reloadInterval))
 		go func() {
 			for _ = range ticker.C {
-				load(session)
+				load(session, historize)
 			}
 		}()
 	}
 
 	if noSync == false {
 		log.Notice("Listening for updates.")
-		go synchronize(session, msgs)
+		go synchronize(session, msgs, historize)
 	}
 
 	if noSync == false || noReload == false {
@@ -651,20 +656,22 @@ type LoaderOp struct {
 }
 
 type Loader struct {
-	count   chan int64
-	wgCount *sync.WaitGroup
-	opers   chan LoaderOps
-	links   chan Node
-	wg      *sync.WaitGroup
-	session gockle.Session
+	count     chan int64
+	wgCount   *sync.WaitGroup
+	opers     chan LoaderOps
+	links     chan Node
+	wg        *sync.WaitGroup
+	session   gockle.Session
+	historize bool
 }
 
-func NewLoader(session gockle.Session) Loader {
+func NewLoader(session gockle.Session, historize bool) Loader {
 	return Loader{
-		count:   make(chan int64),
-		wgCount: &sync.WaitGroup{},
-		wg:      &sync.WaitGroup{},
-		session: session,
+		count:     make(chan int64),
+		wgCount:   &sync.WaitGroup{},
+		wg:        &sync.WaitGroup{},
+		session:   session,
+		historize: historize,
 	}
 }
 
@@ -866,7 +873,12 @@ func (l *Loader) worker() {
 				}
 			case NodeDelete:
 				node := o.obj.(Node)
-				err := node.SetDeleted()
+				var err error
+				if l.historize {
+					err = node.SetDeleted()
+				} else {
+					err = node.Delete()
+				}
 				if err != nil {
 					log.Criticalf("Failed to delete node %v : %s", node, err)
 				} else {
@@ -926,8 +938,8 @@ func (l *Loader) Run() {
 	ioutil.WriteFile(SyncFile, []byte(""), 0644)
 }
 
-func load(session gockle.Session) {
-	loader := NewLoader(session)
+func load(session gockle.Session, historize bool) {
+	loader := NewLoader(session, historize)
 	loader.Run()
 }
 
@@ -998,6 +1010,12 @@ func main() {
 		Desc:   "Time in minutes between reloads",
 		EnvVar: "GREMLIN_SYNC_RELOAD_INTERVAL",
 	})
+	historize := app.Bool(cli.BoolOpt{
+		Name:   "historize",
+		Value:  false,
+		Desc:   "Mark nodes as deleted but don't drop them",
+		EnvVar: "GREMLIN_SYNC_HISTORIZE",
+	})
 	app.Action = func() {
 		var gremlinCluster = make([]string, len(*gremlinSrvs))
 		for i, srv := range *gremlinSrvs {
@@ -1006,7 +1024,7 @@ func main() {
 		}
 		rabbitURI := fmt.Sprintf("amqp://%s:%s@%s/", *rabbitUser, *rabbitPassword, *rabbitSrv)
 		setup(gremlinCluster, *cassandraSrvs, rabbitURI, *rabbitVHost, *rabbitQueue,
-			*noLoad, *noReload, *noSync, *reloadInterval)
+			*noLoad, *noReload, *noSync, *reloadInterval, *historize)
 	}
 	app.Run(os.Args)
 }
