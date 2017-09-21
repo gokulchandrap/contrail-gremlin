@@ -38,7 +38,7 @@ def to_resources(fun):
         for r_ in r:
             res_type = r_[0].replace('_', '-')
             uuid = r_[1]["@value"]
-            fq_name = r_[2:]
+            fq_name = r_[2]
             resources.append(Resource(res_type, uuid=uuid, fq_name=fq_name))
         return resources
     return wrapper
