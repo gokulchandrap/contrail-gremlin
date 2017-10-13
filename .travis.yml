@@ -14,6 +14,8 @@ script:
     - go build -v
     - cd ${TRAVIS_BUILD_DIR}/gremlin-probe
     - go build -v
+    - cd ${TRAVIS_BUILD_DIR}/gremlin-dump
+    - go build -v
     - cd ${TRAVIS_BUILD_DIR}
 
 after_success:
@@ -26,6 +28,7 @@ after_success:
     - cd ${TRAVIS_BUILD_DIR}
     - cp ${TRAVIS_BUILD_DIR}/gremlin-sync/gremlin-sync ${TRAVIS_BUILD_DIR}/contrail-gremlin-binaries
     - cp ${TRAVIS_BUILD_DIR}/gremlin-probe/gremlin-probe ${TRAVIS_BUILD_DIR}/contrail-gremlin-binaries
+    - cp ${TRAVIS_BUILD_DIR}/gremlin-dump/gremlin-dump ${TRAVIS_BUILD_DIR}/contrail-gremlin-binaries
     - cd ${TRAVIS_BUILD_DIR}/contrail-gremlin-binaries
     - git add .
     - git -c user.name='Travis' -c user.email='Travis' commit -m "contrail-gremlin commit ${COMMIT_ID}"
