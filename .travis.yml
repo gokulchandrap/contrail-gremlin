@@ -36,4 +36,4 @@ after_success:
 
 language: go
 go:
-    - 1.7.x
+    - 1.9.x
