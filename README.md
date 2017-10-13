@@ -1,5 +1,4 @@
-contrail-gremlin
-================
+# contrail-gremlin
 
 This project contains a set of tools for using the Gremlin server in the context of Contrail:
 
@@ -9,8 +8,7 @@ This project contains a set of tools for using the Gremlin server in the context
 
 Binairies are available at https://github.com/eonpatapon/contrail-gremlin-binaries
 
-Run gremlin server
-------------------
+# Run gremlin server
 
     wget http://www-eu.apache.org/dist/tinkerpop/3.2.4/apache-tinkerpop-gremlin-server-3.2.5-bin.zip
     unzip apache-tinkerpop-gremlin-server-3.2.5-bin.zip
@@ -21,23 +19,7 @@ Run gremlin server
     export JAVA_OPTIONS="-Xmx2048m -Xms512m"
     bin/gremlin-server.sh conf/gremlin-server-contrail.yaml
 
-Run gremlin-sync
-----------------
-
-Build (you need golang 1.7)
-
-    cd gremlin-sync
-    go get ./...
-    go build
-
-Load and sync Contrail DB in gremlin server
-
-    ./gremlin-sync --rabbit <server> --rabbit-vhost <vhost> --rabbit-user <user> --rabbit-password <pass> --cassandra <server> --gremlin localhost:8182
-
-The DB is reloaded completely every 30min
-
-Connect to server with Gremlin console
---------------------------------------
+## Connect to server with Gremlin console
 
     wget http://www-eu.apache.org/dist/tinkerpop/3.2.5/apache-tinkerpop-gremlin-console-3.2.5-bin.zip
     unzip apache-tinkerpop-gremlin-console-3.2.5-bin.zip
@@ -46,15 +28,20 @@ Connect to server with Gremlin console
 
 In the console do
 
-    :remote connect tinkerpop.server conf/remote.yaml
+    gremlin> :remote connect tinkerpop.server conf/remote.yaml
+    gremlin> :remote console
+    gremlin> g.V()
+    gremlin> g.V().hasLabel('virtual_network')
 
-Then you can query the remote graph with ':>'
+# Using gremlin-sync
 
-    :> g.V()
-    :> g.V().hasLabel('virtual_network')
+Load and sync Contrail DB in gremlin server
 
-Using gremlin-dump
-------------------
+    ./gremlin-sync --rabbit <server> --rabbit-vhost <vhost> --rabbit-user <user> --rabbit-password <pass> --cassandra <server> --gremlin localhost:8182
+
+The DB is reloaded completely every 30min
+
+# Using gremlin-dump
 
     ./gremlin-dump --cassandra localhost dump.json
 
@@ -80,9 +67,9 @@ Then you can load the dump in the gremlin console:
 
 The dump contains all contrail resources including incomplete or missing ones. Incomplete are resources that have no type or fq_name or id_perms properties. Missing are resources that are not in the DB but still referenced by other resources. Incomplete resources have an `_incomplete` property, missings ones have a `_missing` property.
 
-# Use cases
+## Use cases
 
-## Broken references
+### Broken references
 
 For example to get resources that reference missing references we can do:
 
@@ -125,10 +112,10 @@ In this case the parent link between some RI and VN is broken because the VN is 
 
     cqlsh:config_db_uuid>
 
-Run gremlin-fsck
-----------------
 
-gremlin-fsck is a contrail-api-cli command. It will run different consistency checks on the gremlin server and clean/fix resources if needed.
+## Run gremlin-fsck
+
+gremlin-fsck is a contrail-api-cli command. It will run different consistency checks on the gremlin server and clean/fix resources if needed with some contrail-api-cli-extra commands.
 
     cd gremlin-fsck
     pip install -r requirements.txt
