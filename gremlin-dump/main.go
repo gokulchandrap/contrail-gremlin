@@ -264,6 +264,8 @@ func (l *Dumper) getContrailResource(session gockle.Session, uuid string) (Verte
 		}
 	}
 
+	vertex.AddProperty("deleted", 0, l)
+
 	return vertex, nil
 }
 
