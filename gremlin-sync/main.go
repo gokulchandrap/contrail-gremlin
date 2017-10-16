@@ -407,7 +407,7 @@ func (s *Sync) removePendingNotification(n Notification, i int) {
 
 func (s *Sync) handlePendingNotification(n Notification) {
 	switch n.Oper {
-	// Remove previous notifications in the pending list
+	// On DELETE, remove previous notifications in the pending list
 	case "DELETE":
 		for i := 0; i < len(s.pending); i++ {
 			n2 := s.pending[i]
