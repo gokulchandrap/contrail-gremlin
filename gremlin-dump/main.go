@@ -172,8 +172,7 @@ func (l *Dumper) getContrailResource(session gockle.Session, uuid string) (Verte
 		valueJSON = []byte(row["value"].(string))
 		split := strings.Split(column1, ":")
 		switch split[0] {
-		case "ref":
-		case "parent":
+		case "parent", "ref":
 			label := split[0]
 			edgeUUID := uuid + "-" + split[2]
 			id := l.getEdgeID(edgeUUID)
@@ -194,8 +193,7 @@ func (l *Dumper) getContrailResource(session gockle.Session, uuid string) (Verte
 				},
 			}
 			l.seen <- ve
-		case "backref":
-		case "children":
+		case "children", "backref":
 			var label string
 			if split[0] == "backref" {
 				label = "ref"
@@ -248,6 +246,22 @@ func (l *Dumper) getContrailResource(session gockle.Session, uuid string) (Verte
 	}
 	if _, ok := vertex.Properties["id_perms.created"]; !ok {
 		vertex.AddProperty("_incomplete", true, l)
+	}
+
+	// Add updated/created properties timestamps
+	if created, ok := vertex.Properties["id_perms.created"]; ok {
+		for _, prop := range created {
+			if time, err := time.Parse(time.RFC3339Nano, prop.Value.(string)+`Z`); err == nil {
+				vertex.AddProperty("created", time.Unix(), l)
+			}
+		}
+	}
+	if updated, ok := vertex.Properties["id_perms.last_modified"]; ok {
+		for _, prop := range updated {
+			if time, err := time.Parse(time.RFC3339Nano, prop.Value.(string)+`Z`); err == nil {
+				vertex.AddProperty("updated", time.Unix(), l)
+			}
+		}
 	}
 
 	return vertex, nil

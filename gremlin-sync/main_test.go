@@ -30,18 +30,18 @@ func TestNodeLink(t *testing.T) {
 	}
 
 	vnUUID := uuid.NewV4().String()
-	vn := Node{
-		UUID: vnUUID,
+	vn := Vertex{
+		ID:   vnUUID,
 		Type: "virtual_machine",
 	}
 	vn.Create()
 
 	vmiUUID := uuid.NewV4().String()
-	vmi := Node{
-		UUID: vmiUUID,
+	vmi := Vertex{
+		ID:   vmiUUID,
 		Type: "virtual_machine_interface",
-		Links: []Link{
-			Link{
+		Edges: []Edge{
+			Edge{
 				Source: vmiUUID,
 				Target: vnUUID,
 				Type:   "ref",
@@ -57,13 +57,13 @@ func TestNodeLink(t *testing.T) {
 	assert.Equal(t, vmiUUID, uuids[0], "VMI not correctly linked to VN")
 
 	projectUUID := uuid.NewV4().String()
-	project := Node{
-		UUID: projectUUID,
+	project := Vertex{
+		ID:   projectUUID,
 		Type: "project",
 	}
 	project.Create()
 
-	vmi.Links = append(vmi.Links, Link{
+	vmi.Edges = append(vmi.Edges, Edge{
 		Source: projectUUID,
 		Target: vmiUUID,
 		Type:   "parent",
@@ -97,7 +97,7 @@ func TestNodeProperties(t *testing.T) {
 		nil,
 	)
 
-	node, _ := getContrailNode(session, nodeUUID)
+	node, _ := getContrailResource(session, nodeUUID)
 	node.Create()
 
 	var uuids []string
@@ -120,8 +120,8 @@ func TestNodeExists(t *testing.T) {
 	}
 
 	nodeUUID := uuid.NewV4().String()
-	node := Node{
-		UUID: nodeUUID,
+	node := Vertex{
+		ID:   nodeUUID,
 		Type: "label",
 		Properties: map[string]interface{}{
 			"prop": "value",
@@ -131,7 +131,7 @@ func TestNodeExists(t *testing.T) {
 	exists, _ := node.Exists()
 	assert.Equal(t, true, exists)
 
-	node.UUID = uuid.NewV4().String()
+	node.ID = uuid.NewV4().String()
 	exists, _ = node.Exists()
 	assert.Equal(t, false, exists)
 }
@@ -143,20 +143,20 @@ func TestLinkExists(t *testing.T) {
 	}
 
 	node1UUID := uuid.NewV4().String()
-	node1 := Node{
-		UUID: node1UUID,
+	node1 := Vertex{
+		ID:   node1UUID,
 		Type: "foo",
 	}
 	node1.Create()
 
 	node2UUID := uuid.NewV4().String()
-	node2 := Node{
-		UUID: node2UUID,
+	node2 := Vertex{
+		ID:   node2UUID,
 		Type: "bar",
 	}
 	node2.Create()
 
-	link := Link{
+	link := Edge{
 		Source: node1UUID,
 		Target: node2UUID,
 		Type:   "foobar",
@@ -175,18 +175,18 @@ func TestLinkDiff(t *testing.T) {
 	}
 
 	node1UUID := uuid.NewV4().String()
-	node1 := Node{
-		UUID: node1UUID,
+	node1 := Vertex{
+		ID:   node1UUID,
 		Type: "foo",
 	}
 	node1.Create()
 
 	node2UUID := uuid.NewV4().String()
-	node2 := Node{
-		UUID: node2UUID,
+	node2 := Vertex{
+		ID:   node2UUID,
 		Type: "bar",
-		Links: []Link{
-			Link{
+		Edges: []Edge{
+			Edge{
 				Source: node2UUID,
 				Target: node1UUID,
 				Type:   "ref",
@@ -205,11 +205,18 @@ func TestLinkDiff(t *testing.T) {
 	assert.Equal(t, 0, len(toAdd))
 	assert.Equal(t, 0, len(toRemove))
 
-	node2b := Node{
-		UUID: node2UUID,
+	node2b := Vertex{
+		ID:   node2UUID,
 		Type: "bar",
+		Edges: []Edge{
+			Edge{
+				Source: node2UUID,
+				Target: node1UUID,
+				Type:   "parent",
+			},
+		},
 	}
 	toAdd, toRemove, _ = node2b.DiffLinks()
-	assert.Equal(t, 0, len(toAdd))
+	assert.Equal(t, 1, len(toAdd))
 	assert.Equal(t, 1, len(toRemove))
 }

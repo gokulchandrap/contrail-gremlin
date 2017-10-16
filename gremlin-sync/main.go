@@ -5,12 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
-	"reflect"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Jeffail/gabs"
@@ -23,30 +19,15 @@ import (
 )
 
 var (
-	log    = logging.MustGetLogger("gremlin-loader")
+	log    = logging.MustGetLogger("gremlin-sync")
 	format = logging.MustStringFormatter(
 		`%{color}%{time:15:04:05.000} %{shortfunc} ▶ %{level:.4s} %{id:03x}%{color:reset} %{message}`)
-	session *gocql.Session
 )
 
 const (
 	QueryMaxSize = 40000
 	VncExchange  = "vnc_config.object-update"
 	QueueName    = "gremlin.sync"
-	Workers      = 5
-	SyncFile     = "/tmp/gremlin-synced"
-)
-
-const (
-	NodeCreate = iota
-	RawNodeCreate
-	NodeUpdate
-	NodeDelete
-	LinkCreate
-	LinkDelete
-	NodeSyncStart
-	LinkSyncStart
-	SyncEnd
 )
 
 type Notification struct {
@@ -55,7 +36,7 @@ type Notification struct {
 	UUID string `json:"uuid"`
 }
 
-type Link struct {
+type Edge struct {
 	Source     string `json:"outV"`
 	SourceType string `json:"outVLabel"`
 	Target     string `json:"inV"`
@@ -63,7 +44,7 @@ type Link struct {
 	Type       string `json:"label"`
 }
 
-func (l Link) Create() error {
+func (l Edge) Create() error {
 	_, err := gremlin.Query("g.V(src).as('src').V(dst).addE(type).from('src')").Bindings(
 		gremlin.Bind{
 			"src":  l.Source,
@@ -73,7 +54,7 @@ func (l Link) Create() error {
 	return err
 }
 
-func (l Link) Exists() (exists bool, err error) {
+func (l Edge) Exists() (exists bool, err error) {
 	var (
 		data []byte
 		res  []bool
@@ -91,7 +72,7 @@ func (l Link) Exists() (exists bool, err error) {
 	return res[0], err
 }
 
-func (l Link) Delete() error {
+func (l Edge) Delete() error {
 	_, err := gremlin.Query("g.V(src).bothE().where(otherV().hasId(dst)).drop()").Bindings(
 		gremlin.Bind{
 			"src": l.Source,
@@ -100,78 +81,50 @@ func (l Link) Delete() error {
 	return err
 }
 
-type Node struct {
-	UUID       string                 `json:"id"`
+type Vertex struct {
+	ID         string                 `json:"id"`
 	Type       string                 `json:"label"`
 	Properties map[string]interface{} `json:"properties"`
-	Links      []Link
-	Created    int64
-	Updated    int64
-	Deleted    int64
+	Edges      []Edge
 }
 
-func (n *Node) SetDeleted() error {
-	n.Deleted = time.Now().Unix()
-	_, err := gremlin.Query("g.V(uuid).property('deleted', time)").Bindings(
+func (n *Vertex) SetDeleted() error {
+	_, err := gremlin.Query("g.V(_id).property('deleted', _deleted)").Bindings(
 		gremlin.Bind{
-			"uuid": n.UUID,
-			"time": n.Deleted,
+			"_id":      n.ID,
+			"_deleted": time.Now().Unix(),
 		}).Exec()
 	return err
 }
 
-func (n Node) createUpdateQuery(base string) ([]string, error) {
-	var queries []string
+func (n Vertex) propertiesQuery() (string, gremlin.Bind, error) {
 	if n.Type == "" {
-		return nil, errors.New("Node has no type, skip.")
+		return "", gremlin.Bind{}, errors.New("Node has no type, skip.")
 	}
-	if n.Created != 0 {
-		base += fmt.Sprintf(`.property("created", %d)`, n.Created)
+
+	var buffer bytes.Buffer
+	bindings := gremlin.Bind{}
+	for propName, propValue := range n.Properties {
+		bindName := `_` + strings.Replace(propName, `.`, `_`, -1)
+		buffer.WriteString(".property('")
+		buffer.WriteString(propName)
+		buffer.WriteString(`',`)
+		buffer.WriteString(bindName)
+		buffer.WriteString(`)`)
+		bindings[bindName] = propValue
 	}
-	if n.Updated != 0 {
-		base += fmt.Sprintf(`.property("updated", %d)`, n.Updated)
-	}
-	base += fmt.Sprintf(`.property("deleted", %d)`, n.Deleted)
-	encoder := GremlinPropertiesEncoder{
-		stringReplacer: strings.NewReplacer(`"`, `\"`, "\n", `\n`, "\r", ``, `$`, `\$`),
-	}
-	err := encoder.Encode(n.Properties)
-	if err != nil {
-		return nil, err
-	}
-	encodedProps := encoder.String()
-	query := fmt.Sprintf("%s%s", base, encodedProps)
-	// When there is to many properties, add them in multiple passes
-	if len([]byte(query)) > QueryMaxSize {
-		props := strings.Split(encodedProps, ".property")
-		queryBase := `g.V(uuid)`
-		query = base
-		for _, prop := range props[1:] {
-			queryTmp := fmt.Sprintf("%s.property%s", query, prop)
-			if len([]byte(queryTmp)) > QueryMaxSize {
-				queries = append(queries, query)
-				if err != nil {
-					return nil, err
-				}
-				query = fmt.Sprintf("%s.property%s", queryBase, prop)
-			} else {
-				query = queryTmp
-			}
-		}
-	} else {
-		queries = append(queries, query)
-	}
-	return queries, nil
+
+	return buffer.String(), bindings, nil
 }
 
-func (n Node) Exists() (exists bool, err error) {
+func (n Vertex) Exists() (exists bool, err error) {
 	var (
 		data []byte
 		res  []bool
 	)
-	data, err = gremlin.Query(`g.V(uuid).hasLabel(type).hasNext()`).Bindings(gremlin.Bind{
-		"uuid": n.UUID,
-		"type": n.Type,
+	data, err = gremlin.Query(`g.V(_id).hasLabel(_type).hasNext()`).Bindings(gremlin.Bind{
+		"_id":   n.ID,
+		"_type": n.Type,
 	}).Exec()
 	if err != nil {
 		return exists, err
@@ -180,25 +133,23 @@ func (n Node) Exists() (exists bool, err error) {
 	return res[0], err
 }
 
-func (n Node) Create() error {
-	queries, err := n.createUpdateQuery(`g.addV(id, uuid, label, type)`)
+func (n Vertex) Create() error {
+	props, bindings, err := n.propertiesQuery()
 	if err != nil {
 		return err
 	}
-	for _, query := range queries {
-		_, err = gremlin.Query(query).Bindings(gremlin.Bind{
-			"uuid": n.UUID,
-			"type": n.Type,
-		}).Exec()
-		if err != nil {
-			return err
-		}
+	bindings["_id"] = n.ID
+	bindings["_type"] = n.Type
+	query := `g.addV(id, _id, label, _type)` + props + `.interate()`
+	_, err = gremlin.Query(query).Bindings(bindings).Exec()
+	if err != nil {
+		return err
 	}
 	return nil
 }
 
-func (n Node) CreateLinks() error {
-	for _, link := range n.Links {
+func (n Vertex) CreateLinks() error {
+	for _, link := range n.Edges {
 		err := link.Create()
 		if err != nil {
 			return err
@@ -207,67 +158,45 @@ func (n Node) CreateLinks() error {
 	return nil
 }
 
-func (n Node) Update() error {
-	queries, err := n.createUpdateQuery(`g.V(uuid)`)
-	if err != nil {
-		return err
-	}
-	_, err = gremlin.Query(`g.V(uuid).properties().drop()`).Bindings(gremlin.Bind{
-		"uuid": n.UUID,
-		"type": n.Type,
+func (n Vertex) Update() error {
+	query := `g.V(_id).properties().drop()`
+	_, err := gremlin.Query(query).Bindings(gremlin.Bind{
+		"_id": n.ID,
 	}).Exec()
 	if err != nil {
 		return err
 	}
-	for _, query := range queries {
-		_, err := gremlin.Query(query).Bindings(gremlin.Bind{
-			"uuid": n.UUID,
-			"type": n.Type,
-		}).Exec()
-		if err != nil {
-			return err
-		}
+	props, bindings, err := n.propertiesQuery()
+	if err != nil {
+		return err
+	}
+	bindings["_id"] = n.ID
+	query = `g.V(_id)` + props + `.iterate()`
+	_, err = gremlin.Query(query).Bindings(bindings).Exec()
+	if err != nil {
+		return err
 	}
 	return nil
 }
 
 // CurrentLinks returns the Links of the Node in its current state
-func (n Node) CurrentLinks() ([]Link, error) {
-	// TODO: get links in one query
-	var (
-		refLinks    []Link
-		parentLinks []Link
-		allLinks    []Link
-	)
-	data1, err := gremlin.Query(`g.V(uuid).outE('ref')`).Bindings(gremlin.Bind{
-		"uuid": n.UUID,
+func (n Vertex) CurrentLinks() (links []Edge, err error) {
+	var data []byte
+	data, err = gremlin.Query(`g.V(_id).bothE()`).Bindings(gremlin.Bind{
+		"_id": n.ID,
 	}).Exec()
 	if err != nil {
 		return nil, err
 	}
-	json.Unmarshal(data1, &refLinks)
-	for _, link := range refLinks {
-		allLinks = append(allLinks, link)
-	}
+	json.Unmarshal(data, &links)
 
-	data2, err := gremlin.Query(`g.V(uuid).inE('parent')`).Bindings(gremlin.Bind{
-		"uuid": n.UUID,
-	}).Exec()
-	if err != nil {
-		return nil, err
-	}
-	json.Unmarshal(data2, &parentLinks)
-	for _, link := range parentLinks {
-		allLinks = append(allLinks, link)
-	}
-
-	return allLinks, err
+	return links, err
 }
 
-func (n Node) DiffLinks() ([]Link, []Link, error) {
+func (n Vertex) DiffLinks() ([]Edge, []Edge, error) {
 	var (
-		toAdd    []Link
-		toRemove []Link
+		toAdd    []Edge
+		toRemove []Edge
 	)
 
 	currentLinks, err := n.CurrentLinks()
@@ -275,7 +204,7 @@ func (n Node) DiffLinks() ([]Link, []Link, error) {
 		return toAdd, toRemove, err
 	}
 
-	for _, l1 := range n.Links {
+	for _, l1 := range n.Edges {
 		found := false
 		for _, l2 := range currentLinks {
 			if l1.Source == l2.Source && l1.Target == l2.Target && l1.Type == l2.Type {
@@ -290,7 +219,7 @@ func (n Node) DiffLinks() ([]Link, []Link, error) {
 
 	for _, l1 := range currentLinks {
 		found := false
-		for _, l2 := range n.Links {
+		for _, l2 := range n.Edges {
 			if l1.Source == l2.Source && l1.Target == l2.Target && l1.Type == l2.Type {
 				found = true
 				break
@@ -306,7 +235,7 @@ func (n Node) DiffLinks() ([]Link, []Link, error) {
 
 // UpdateLinks check the current Node links in gremlin server
 // and apply node.Links accordingly
-func (n Node) UpdateLinks() error {
+func (n Vertex) UpdateLinks() error {
 	toAdd, toRemove, err := n.DiffLinks()
 	if err != nil {
 		return err
@@ -329,9 +258,9 @@ func (n Node) UpdateLinks() error {
 	return nil
 }
 
-func (n Node) Delete() error {
-	_, err := gremlin.Query(`g.V(uuid).drop()`).Bindings(gremlin.Bind{
-		"uuid": n.UUID,
+func (n Vertex) Delete() error {
+	_, err := gremlin.Query(`g.V(_id).drop()`).Bindings(gremlin.Bind{
+		"_id": n.ID,
 	}).Exec()
 	if err != nil {
 		return err
@@ -339,7 +268,7 @@ func (n Node) Delete() error {
 	return nil
 }
 
-func (n Node) AddProperties(prefix string, c *gabs.Container) {
+func (n Vertex) AddProperties(prefix string, c *gabs.Container) {
 	if _, ok := c.Data().([]interface{}); ok {
 		childs, _ := c.Children()
 		for _, child := range childs {
@@ -369,7 +298,7 @@ func (n Node) AddProperties(prefix string, c *gabs.Container) {
 	n.AddProperty(prefix, "null")
 }
 
-func (n Node) AddProperty(prefix string, value interface{}) {
+func (n Vertex) AddProperty(prefix string, value interface{}) {
 	if val, ok := n.Properties[prefix]; ok {
 		switch val.(type) {
 		case []interface{}:
@@ -442,7 +371,7 @@ func synchronize(session gockle.Session, msgs <-chan amqp.Delivery, historize bo
 		json.Unmarshal(d.Body, &n)
 		switch n.Oper {
 		case "CREATE":
-			node, err := getContrailNode(session, n.UUID)
+			node, err := getContrailResource(session, n.UUID)
 			if err != nil {
 				log.Errorf("%s/%s create failed: %s", n.Type, n.UUID, err)
 			} else {
@@ -452,7 +381,7 @@ func synchronize(session gockle.Session, msgs <-chan amqp.Delivery, historize bo
 			}
 			d.Ack(false)
 		case "UPDATE":
-			node, err := getContrailNode(session, n.UUID)
+			node, err := getContrailResource(session, n.UUID)
 			if err != nil {
 				log.Errorf("%s/%s update failed: %s", n.Type, n.UUID, err)
 			} else {
@@ -462,7 +391,7 @@ func synchronize(session gockle.Session, msgs <-chan amqp.Delivery, historize bo
 			}
 			d.Ack(false)
 		case "DELETE":
-			node := Node{UUID: n.UUID}
+			node := Vertex{ID: n.UUID}
 			var err error
 			if historize {
 				err = node.SetDeleted()
@@ -517,7 +446,7 @@ func setupCassandra(cassandraCluster []string) (gockle.Session, error) {
 	return mockableSession, err
 }
 
-func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string, rabbitVHost string, rabbitQueue string, noLoad bool, noReload bool, noSync bool, reloadInterval int, historize bool) {
+func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string, rabbitVHost string, rabbitQueue string, historize bool) {
 	var (
 		conn    *amqp.Connection
 		msgs    <-chan amqp.Delivery
@@ -540,38 +469,18 @@ func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string,
 	}
 	defer session.Close()
 
-	if noSync == false {
-		conn, _, msgs = setupRabbit(rabbitURI, rabbitVHost, rabbitQueue)
-		defer conn.Close()
-	}
+	conn, _, msgs = setupRabbit(rabbitURI, rabbitVHost, rabbitQueue)
+	defer conn.Close()
 
-	if noLoad == false {
-		load(session, historize)
-	}
+	log.Notice("Listening for updates.")
+	go synchronize(session, msgs, historize)
 
-	if noReload == false {
-		log.Noticef("Configured reload with %dm interval.", reloadInterval)
-		ticker := time.NewTicker(time.Minute * time.Duration(reloadInterval))
-		go func() {
-			for _ = range ticker.C {
-				load(session, historize)
-			}
-		}()
-	}
-
-	if noSync == false {
-		log.Notice("Listening for updates.")
-		go synchronize(session, msgs, historize)
-	}
-
-	if noSync == false || noReload == false {
-		log.Notice("To exit press CTRL+C")
-		forever := make(chan bool)
-		<-forever
-	}
+	log.Notice("To exit press CTRL+C")
+	forever := make(chan bool)
+	<-forever
 }
 
-func getContrailNode(session gockle.Session, uuid string) (Node, error) {
+func getContrailResource(session gockle.Session, uuid string) (Vertex, error) {
 	var (
 		column1   string
 		valueJSON []byte
@@ -579,10 +488,10 @@ func getContrailNode(session gockle.Session, uuid string) (Node, error) {
 	rows, err := session.ScanMapSlice(`SELECT key, column1, value FROM obj_uuid_table WHERE key=?`, uuid)
 	if err != nil {
 		log.Criticalf("[%s] %s", uuid, err)
-		return Node{}, err
+		return Vertex{}, err
 	}
-	node := Node{
-		UUID:       uuid,
+	node := Vertex{
+		ID:         uuid,
 		Properties: map[string]interface{}{},
 	}
 	for _, row := range rows {
@@ -590,19 +499,25 @@ func getContrailNode(session gockle.Session, uuid string) (Node, error) {
 		valueJSON = []byte(row["value"].(string))
 		split := strings.Split(column1, ":")
 		switch split[0] {
-		case "ref":
-			node.Links = append(node.Links, Link{
+		case "parent", "ref":
+			node.Edges = append(node.Edges, Edge{
 				Source:     uuid,
 				Target:     split[2],
 				TargetType: split[1],
 				Type:       split[0],
 			})
-		case "parent":
-			node.Links = append(node.Links, Link{
+		case "backref", "children":
+			var label string
+			if split[0] == "backref" {
+				label = "ref"
+			} else {
+				label = "parent"
+			}
+			node.Edges = append(node.Edges, Edge{
 				Source:     split[2],
 				SourceType: split[1],
 				Target:     uuid,
-				Type:       split[0],
+				Type:       label,
 			})
 		case "type":
 			var value string
@@ -611,9 +526,7 @@ func getContrailNode(session gockle.Session, uuid string) (Node, error) {
 		case "fq_name":
 			var value []string
 			json.Unmarshal(valueJSON, &value)
-			for _, c := range value {
-				node.AddProperty("fq_name", c)
-			}
+			node.AddProperty("fq_name", value)
 		case "prop":
 			value, err := gabs.ParseJSON(valueJSON)
 			if err != nil {
@@ -626,321 +539,18 @@ func getContrailNode(session gockle.Session, uuid string) (Node, error) {
 
 	if created, ok := node.Properties["id_perms.created"]; ok {
 		if time, err := time.Parse(time.RFC3339Nano, created.(string)+`Z`); err == nil {
-			node.Created = time.Unix()
+			node.AddProperty("created", time.Unix())
 		}
 	}
 	if updated, ok := node.Properties["id_perms.last_modified"]; ok {
 		if time, err := time.Parse(time.RFC3339Nano, updated.(string)+`Z`); err == nil {
-			node.Updated = time.Unix()
+			node.AddProperty("updated", time.Unix())
 		}
 	}
+
+	node.AddProperty("deleted", 0)
 
 	return node, nil
-}
-
-type LoaderOps struct {
-	opers []LoaderOp
-}
-
-func NewLoaderOps() LoaderOps {
-	return LoaderOps{opers: make([]LoaderOp, 0)}
-}
-
-func (l *LoaderOps) Add(oper int64, obj interface{}) {
-	l.opers = append(l.opers, LoaderOp{oper: oper, obj: obj})
-}
-
-type LoaderOp struct {
-	oper int64
-	obj  interface{}
-}
-
-type Loader struct {
-	count     chan int64
-	wgCount   *sync.WaitGroup
-	opers     chan LoaderOps
-	links     chan Node
-	wg        *sync.WaitGroup
-	session   gockle.Session
-	historize bool
-}
-
-func NewLoader(session gockle.Session, historize bool) Loader {
-	return Loader{
-		count:     make(chan int64),
-		wgCount:   &sync.WaitGroup{},
-		wg:        &sync.WaitGroup{},
-		session:   session,
-		historize: historize,
-	}
-}
-
-func (l *Loader) report() {
-	nodeCreateCount := 0
-	nodeUpdateCount := 0
-	nodeDeleteCount := 0
-	linkCreateCount := 0
-	linkDeleteCount := 0
-
-	nodeSyncStatus := `W`
-	linkSyncStatus := `W`
-
-	for c := range l.count {
-		switch c {
-		case NodeCreate:
-			nodeCreateCount++
-		case NodeUpdate:
-			nodeUpdateCount++
-		case NodeDelete:
-			nodeDeleteCount++
-		case LinkCreate:
-			linkCreateCount++
-		case LinkDelete:
-			linkDeleteCount++
-		case NodeSyncStart:
-			nodeSyncStatus = `R`
-		case LinkSyncStart:
-			linkSyncStatus = `R`
-		case SyncEnd:
-			if nodeSyncStatus == `R` {
-				nodeSyncStatus = `D`
-			}
-			if linkSyncStatus == `R` {
-				linkSyncStatus = `D`
-			}
-		}
-		fmt.Printf("\rProcessing [nodes:%d/%d/%d/%s] [links: %d/%d/%s]",
-			nodeCreateCount, nodeUpdateCount, nodeDeleteCount, nodeSyncStatus,
-			linkCreateCount, linkDeleteCount, linkSyncStatus)
-	}
-	fmt.Println()
-}
-
-func (l *Loader) waitCount() {
-	close(l.count)
-	l.wgCount.Wait()
-	// just to line up the display
-	time.Sleep(time.Second * 1)
-}
-
-func (l *Loader) getContrailNodes() (map[string]Node, error) {
-	var (
-		key     string
-		column1 string
-	)
-	contrailNodes := make(map[string]Node)
-	r := l.session.ScanIterator(`SELECT key, column1 FROM obj_fq_name_table`)
-	for r.Scan(&key, &column1) {
-		parts := strings.Split(column1, ":")
-		uuid := parts[len(parts)-1]
-		contrailNodes[uuid] = Node{UUID: uuid, Type: key}
-	}
-	if err := r.Close(); err != nil {
-		return contrailNodes, err
-	}
-	return contrailNodes, nil
-}
-
-func (l *Loader) getGremlinNodes() (map[string]Node, error) {
-	var (
-		nodes []Node
-	)
-	gremlinNodes := make(map[string]Node)
-	data, err := gremlin.Query(`g.V().has('deleted', 0)`).Exec()
-	if err != nil {
-		return gremlinNodes, err
-	}
-	json.Unmarshal(data, &nodes)
-	for _, node := range nodes {
-		gremlinNodes[node.UUID] = node
-	}
-	return gremlinNodes, nil
-}
-
-func (l *Loader) syncNodes() (err error) {
-	defer close(l.opers)
-
-	var (
-		contrailNodes map[string]Node
-		gremlinNodes  map[string]Node
-	)
-
-	contrailNodes, err = l.getContrailNodes()
-	if err != nil {
-		return err
-	}
-	gremlinNodes, err = l.getGremlinNodes()
-	if err != nil {
-		return err
-	}
-	log.Debugf("Active nodes [contrail:%d] [gremlin:%d]",
-		len(contrailNodes), len(gremlinNodes))
-
-	l.links = make(chan Node, len(contrailNodes))
-
-	l.count <- NodeSyncStart
-	for uuid, cNode := range contrailNodes {
-		opers := NewLoaderOps()
-		if gNode, ok := gremlinNodes[uuid]; ok {
-			opers.Add(NodeUpdate, gNode)
-			l.opers <- opers
-		} else {
-			opers.Add(NodeCreate, cNode)
-			l.opers <- opers
-		}
-	}
-	for uuid, gNode := range gremlinNodes {
-		opers := NewLoaderOps()
-		if _, ok := contrailNodes[uuid]; !ok {
-			opers.Add(NodeDelete, gNode)
-			l.opers <- opers
-		}
-	}
-
-	return nil
-}
-
-func (l *Loader) syncLinks() {
-	l.count <- LinkSyncStart
-	defer close(l.opers)
-	for node := range l.links {
-		toAdd, toRemove, err := node.DiffLinks()
-		if err != nil {
-			continue
-		}
-
-		for _, link := range toAdd {
-			opers := NewLoaderOps()
-			if link.SourceType != "" {
-				source := Node{UUID: link.Source, Type: link.SourceType}
-				if exists, _ := source.Exists(); !exists {
-					opers.Add(RawNodeCreate, source)
-				}
-			}
-			if link.TargetType != "" {
-				target := Node{UUID: link.Target, Type: link.TargetType}
-				if exists, _ := target.Exists(); !exists {
-					opers.Add(RawNodeCreate, target)
-				}
-			}
-			opers.Add(LinkCreate, link)
-			l.opers <- opers
-		}
-
-		for _, link := range toRemove {
-			opers := NewLoaderOps()
-			opers.Add(LinkDelete, link)
-			l.opers <- opers
-		}
-	}
-}
-
-func (l *Loader) worker() {
-	defer l.wg.Done()
-	for ops := range l.opers {
-		for _, o := range ops.opers {
-			switch o.oper {
-			case RawNodeCreate:
-				node := o.obj.(Node)
-				if err := node.Create(); err != nil {
-					log.Criticalf("Failed to create node %v : %s", node, err)
-				} else {
-					l.count <- NodeCreate
-				}
-			case NodeCreate:
-				node, err := getContrailNode(l.session, o.obj.(Node).UUID)
-				if err != nil {
-					log.Criticalf("Failed to retrieve node %s: %s", o.obj.(Node).UUID, err)
-				} else {
-					if err := node.Create(); err != nil {
-						log.Criticalf("Failed to create node %v : %s", node, err)
-					} else {
-						l.count <- NodeCreate
-						l.links <- node
-					}
-				}
-			case NodeUpdate:
-				node, err := getContrailNode(l.session, o.obj.(Node).UUID)
-				if err != nil {
-					log.Criticalf("Failed to retrieve node %s: %s", o.obj.(Node).UUID, err)
-				} else {
-					if err := node.Update(); err != nil {
-						log.Criticalf("Failed to update node %v : %s", node, err)
-					} else {
-						l.count <- NodeUpdate
-						l.links <- node
-					}
-				}
-			case NodeDelete:
-				node := o.obj.(Node)
-				var err error
-				if l.historize {
-					err = node.SetDeleted()
-				} else {
-					err = node.Delete()
-				}
-				if err != nil {
-					log.Criticalf("Failed to delete node %v : %s", node, err)
-				} else {
-					l.count <- NodeDelete
-				}
-			case LinkCreate:
-				link := o.obj.(Link)
-				if err := link.Create(); err != nil {
-					log.Criticalf("Failed to create link %v : %s", link, err)
-				} else {
-					l.count <- LinkCreate
-				}
-			case LinkDelete:
-				link := o.obj.(Link)
-				if err := link.Delete(); err != nil {
-					log.Criticalf("Failed to delete link %v : %s", link, err)
-				} else {
-					l.count <- LinkDelete
-				}
-			}
-		}
-	}
-}
-
-func (l *Loader) setupWorkers() {
-	l.opers = make(chan LoaderOps)
-	for w := 1; w <= Workers; w++ {
-		l.wg.Add(1)
-		go l.worker()
-	}
-}
-
-func (l *Loader) waitWorkers() {
-	l.wg.Wait()
-	l.count <- SyncEnd
-}
-
-func (l *Loader) Run() {
-	os.Remove(SyncFile)
-	go l.report()
-
-	l.setupWorkers()
-	err := l.syncNodes()
-	if err != nil {
-		log.Criticalf("Sync failed: %s", err)
-		return
-	}
-	l.waitWorkers()
-	// close channel created in syncNodes
-	close(l.links)
-
-	l.setupWorkers()
-	l.syncLinks()
-	l.waitWorkers()
-
-	l.waitCount()
-	ioutil.WriteFile(SyncFile, []byte(""), 0644)
-}
-
-func load(session gockle.Session, historize bool) {
-	loader := NewLoader(session, historize)
-	loader.Run()
 }
 
 func main() {
@@ -986,30 +596,6 @@ func main() {
 		Desc:   "name of rabbitmq name",
 		EnvVar: "GREMLIN_SYNC_RABBIT_QUEUE",
 	})
-	noLoad := app.Bool(cli.BoolOpt{
-		Name:   "no-load",
-		Value:  false,
-		Desc:   "Don't load cassandra DB",
-		EnvVar: "GREMLIN_SYNC_NO_LOAD",
-	})
-	noReload := app.Bool(cli.BoolOpt{
-		Name:   "no-reload",
-		Value:  false,
-		Desc:   "Don't reload cassandra DB",
-		EnvVar: "GREMLIN_SYNC_NO_RELOAD",
-	})
-	noSync := app.Bool(cli.BoolOpt{
-		Name:   "no-sync",
-		Value:  false,
-		Desc:   "Don't sync with RabbitMQ",
-		EnvVar: "GREMLIN_SYNC_NO_SYNC",
-	})
-	reloadInterval := app.Int(cli.IntOpt{
-		Name:   "reload-interval",
-		Value:  30,
-		Desc:   "Time in minutes between reloads",
-		EnvVar: "GREMLIN_SYNC_RELOAD_INTERVAL",
-	})
 	historize := app.Bool(cli.BoolOpt{
 		Name:   "historize",
 		Value:  false,
@@ -1022,105 +608,10 @@ func main() {
 			gremlinCluster[i] = fmt.Sprintf("ws://%s/gremlin", srv)
 
 		}
-		rabbitURI := fmt.Sprintf("amqp://%s:%s@%s/", *rabbitUser, *rabbitPassword, *rabbitSrv)
-		setup(gremlinCluster, *cassandraSrvs, rabbitURI, *rabbitVHost, *rabbitQueue,
-			*noLoad, *noReload, *noSync, *reloadInterval, *historize)
+		rabbitURI := fmt.Sprintf("amqp://%s:%s@%s/", *rabbitUser,
+			*rabbitPassword, *rabbitSrv)
+		setup(gremlinCluster, *cassandraSrvs, rabbitURI, *rabbitVHost,
+			*rabbitQueue, *historize)
 	}
 	app.Run(os.Args)
-}
-
-type GremlinPropertiesEncoder struct {
-	bytes.Buffer
-	stringReplacer *strings.Replacer
-}
-
-func (p *GremlinPropertiesEncoder) EncodeBool(b bool) error {
-	if b {
-		p.WriteString("true")
-	} else {
-		p.WriteString("false")
-	}
-	return nil
-}
-
-func (p *GremlinPropertiesEncoder) EncodeString(s string) error {
-	p.WriteByte('"')
-	p.WriteString(p.stringReplacer.Replace(s))
-	p.WriteByte('"')
-	return nil
-}
-
-func (p *GremlinPropertiesEncoder) EncodeInt64(i int64) error {
-	p.WriteString(strconv.FormatInt(i, 10))
-	return nil
-}
-
-func (p *GremlinPropertiesEncoder) EncodeUint64(i uint64) error {
-	p.WriteString(strconv.FormatUint(i, 10))
-	return nil
-}
-
-func (p *GremlinPropertiesEncoder) EncodeMap(m map[string]interface{}) error {
-	for k, v := range m {
-		err := p.EncodeKVPair(k, v)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (p *GremlinPropertiesEncoder) EncodeKVPair(k string, v interface{}) error {
-	switch v.(type) {
-	case []interface{}:
-		p.WriteString(".property(")
-		p.EncodeString(k)
-		p.WriteString(", [")
-		for i, val := range v.([]interface{}) {
-			if i > 0 {
-				p.WriteByte(',')
-			}
-			err := p.Encode(val)
-			if err != nil {
-				return err
-			}
-		}
-		p.WriteString("])")
-	default:
-		p.WriteString(".property(")
-		p.EncodeString(k)
-		p.WriteByte(',')
-		err := p.Encode(v)
-		if err != nil {
-			return err
-		}
-		p.WriteString(")")
-	}
-	return nil
-}
-
-func (p *GremlinPropertiesEncoder) Encode(v interface{}) error {
-	switch v.(type) {
-	case bool:
-		return p.EncodeBool(v.(bool))
-	case string:
-		return p.EncodeString(v.(string))
-	case int:
-		return p.EncodeInt64(int64(v.(int)))
-	case int32:
-		return p.EncodeInt64(int64(v.(int32)))
-	case int64:
-		return p.EncodeInt64(v.(int64))
-	case uint:
-		return p.EncodeUint64(uint64(v.(uint)))
-	case uint32:
-		return p.EncodeUint64(uint64(v.(uint32)))
-	case uint64:
-		return p.EncodeUint64(v.(uint64))
-	case float64:
-		return p.EncodeInt64(int64(v.(float64)))
-	case map[string]interface{}:
-		return p.EncodeMap(v.(map[string]interface{}))
-	}
-	return errors.New("type unsupported: " + reflect.TypeOf(v).String())
 }
