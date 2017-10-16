@@ -433,7 +433,7 @@ func (s *Sync) handlePendingNotification(n Notification) {
 func (s Sync) handleNotification(n Notification) bool {
 	switch n.Oper {
 	case "CREATE":
-		node, err := s.getContrailResource(n.UUID)
+		node, err := getContrailResource(s.session, n.UUID)
 		if err != nil {
 			log.Errorf("[%s] %s/%s failed: %s", n.Oper, n.Type, n.UUID, err)
 		} else {
@@ -443,7 +443,7 @@ func (s Sync) handleNotification(n Notification) bool {
 		}
 		return true
 	case "UPDATE":
-		node, err := s.getContrailResource(n.UUID)
+		node, err := getContrailResource(s.session, n.UUID)
 		if err != nil {
 			log.Errorf("[%s] %s/%s failed: %s", n.Oper, n.Type, n.UUID, err)
 		} else {
@@ -472,12 +472,12 @@ func (s Sync) handleNotification(n Notification) bool {
 	}
 }
 
-func (s *Sync) getContrailResource(uuid string) (Vertex, error) {
+func getContrailResource(session gockle.Session, uuid string) (Vertex, error) {
 	var (
 		column1   string
 		valueJSON []byte
 	)
-	rows, err := s.session.ScanMapSlice(`SELECT key, column1, value FROM obj_uuid_table WHERE key=?`, uuid)
+	rows, err := session.ScanMapSlice(`SELECT key, column1, value FROM obj_uuid_table WHERE key=?`, uuid)
 	if err != nil {
 		log.Criticalf("[%s] %s", uuid, err)
 		return Vertex{}, err

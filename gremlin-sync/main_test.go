@@ -6,9 +6,19 @@ import (
 
 	"github.com/go-gremlin/gremlin"
 	uuid "github.com/satori/go.uuid"
+	"github.com/streadway/amqp"
 	"github.com/stretchr/testify/assert"
 	"github.com/willfaught/gockle"
 )
+
+func init() {
+	fakeChan := make(<-chan amqp.Delivery)
+	sync := NewSync(gockle.SessionMock{}, fakeChan, false)
+	err := sync.setupGremlin([]string{"ws://localhost:8182/gremlin"})
+	if err != nil {
+		panic("Failed to connect to gremlin server")
+	}
+}
 
 func checkNode(t *testing.T, query string, bindings gremlin.Bind) []string {
 	var uuids []string
@@ -23,11 +33,6 @@ func checkNode(t *testing.T, query string, bindings gremlin.Bind) []string {
 
 func TestNodeLink(t *testing.T) {
 	var uuids []string
-
-	err := setupGremlin([]string{"ws://localhost:8182/gremlin"})
-	if err != nil {
-		t.Errorf("Failed to connect to gremlin server")
-	}
 
 	vnUUID := uuid.NewV4().String()
 	vn := Vertex{
@@ -76,11 +81,6 @@ func TestNodeLink(t *testing.T) {
 }
 
 func TestNodeProperties(t *testing.T) {
-	err := setupGremlin([]string{"ws://localhost:8182/gremlin"})
-	if err != nil {
-		t.Errorf("Failed to connect to gremlin server")
-	}
-
 	nodeUUID := uuid.NewV4().String()
 	query := "SELECT key, column1, value FROM obj_uuid_table WHERE key=?"
 
@@ -114,11 +114,6 @@ func TestNodeProperties(t *testing.T) {
 }
 
 func TestNodeExists(t *testing.T) {
-	err := setupGremlin([]string{"ws://localhost:8182/gremlin"})
-	if err != nil {
-		t.Errorf("Failed to connect to gremlin server")
-	}
-
 	nodeUUID := uuid.NewV4().String()
 	node := Vertex{
 		ID:   nodeUUID,
@@ -137,11 +132,6 @@ func TestNodeExists(t *testing.T) {
 }
 
 func TestLinkExists(t *testing.T) {
-	err := setupGremlin([]string{"ws://localhost:8182/gremlin"})
-	if err != nil {
-		t.Errorf("Failed to connect to gremlin server")
-	}
-
 	node1UUID := uuid.NewV4().String()
 	node1 := Vertex{
 		ID:   node1UUID,
@@ -169,11 +159,6 @@ func TestLinkExists(t *testing.T) {
 }
 
 func TestLinkDiff(t *testing.T) {
-	err := setupGremlin([]string{"ws://localhost:8182/gremlin"})
-	if err != nil {
-		t.Errorf("Failed to connect to gremlin server")
-	}
-
 	node1UUID := uuid.NewV4().String()
 	node1 := Vertex{
 		ID:   node1UUID,
