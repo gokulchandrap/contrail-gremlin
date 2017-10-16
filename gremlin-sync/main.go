@@ -365,127 +365,119 @@ func setupRabbit(rabbitURI string, rabbitVHost string, rabbitQueue string) (*amq
 	return conn, ch, msgs
 }
 
-func synchronize(session gockle.Session, msgs <-chan amqp.Delivery, historize bool) {
-	for d := range msgs {
+type Sync struct {
+	connected bool
+	session   gockle.Session
+	msgs      <-chan amqp.Delivery
+	historize bool
+	pending   []Notification
+}
+
+func NewSync(session gockle.Session, msgs <-chan amqp.Delivery, historize bool) *Sync {
+	return &Sync{
+		connected: false,
+		session:   session,
+		msgs:      msgs,
+		historize: historize,
+		pending:   make([]Notification, 0),
+	}
+}
+
+func (s *Sync) synchronize() {
+	for d := range s.msgs {
 		n := Notification{}
 		json.Unmarshal(d.Body, &n)
-		switch n.Oper {
-		case "CREATE":
-			node, err := getContrailResource(session, n.UUID)
-			if err != nil {
-				log.Errorf("%s/%s create failed: %s", n.Type, n.UUID, err)
-			} else {
-				node.Create()
-				node.CreateLinks()
-				log.Debugf("%s/%s created", n.Type, n.UUID)
-			}
+		if !s.connected {
+			s.handlePendingNotification(n)
 			d.Ack(false)
-		case "UPDATE":
-			node, err := getContrailResource(session, n.UUID)
-			if err != nil {
-				log.Errorf("%s/%s update failed: %s", n.Type, n.UUID, err)
+		} else {
+			if s.handleNotification(n) {
+				d.Ack(false)
 			} else {
-				node.Update()
-				node.UpdateLinks()
-				log.Debugf("%s/%s updated", n.Type, n.UUID)
-			}
-			d.Ack(false)
-		case "DELETE":
-			node := Vertex{ID: n.UUID}
-			var err error
-			if historize {
-				err = node.SetDeleted()
-			} else {
-				err = node.Delete()
-			}
-			if err != nil {
-				log.Errorf("%s/%s delete failed: %s", n.Type, n.UUID, err)
-			} else {
-				log.Debugf("%s/%s deleted", n.Type, n.UUID)
-			}
-			d.Ack(false)
-		default:
-			log.Errorf("Notification not handled: %s", n)
-			d.Nack(false, false)
-		}
-	}
-	log.Critical("Finish consuming")
-}
-
-func setupGremlin(gremlinCluster []string) (err error) {
-	if err := gremlin.NewCluster(gremlinCluster...); err != nil {
-		log.Fatal("Failed to connect to gremlin server.")
-	} else {
-		for i := 1; i <= 10; i++ {
-			_, _, err = gremlin.CreateConnection()
-			if err != nil {
-				log.Warningf("Failed to connect to Gremlin server, retrying in %ds", i)
-				time.Sleep(time.Duration(i) * time.Second)
-			} else {
-				log.Notice("Connected to Gremlin server.")
-				break
+				d.Nack(false, false)
 			}
 		}
 	}
-	return err
 }
 
-func setupCassandra(cassandraCluster []string) (gockle.Session, error) {
-	log.Notice("Connecting to Cassandra...")
-	cluster := gocql.NewCluster(cassandraCluster...)
-	cluster.Keyspace = "config_db_uuid"
-	cluster.Consistency = gocql.Quorum
-	cluster.Timeout = 2000 * time.Millisecond
-	cluster.DisableInitialHostLookup = true
-	session, err := cluster.CreateSession()
-	if err != nil {
-		return nil, err
-	}
-	mockableSession := gockle.NewSession(session)
-	log.Notice("Connected.")
-	return mockableSession, err
+func (s *Sync) removePendingNotification(n Notification, i int) {
+	log.Debugf("[%s] %s/%s [-]", n.Oper, n.Type, n.UUID)
+	s.pending = append(s.pending[:i], s.pending[i+1:]...)
 }
 
-func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string, rabbitVHost string, rabbitQueue string, historize bool) {
-	var (
-		conn    *amqp.Connection
-		msgs    <-chan amqp.Delivery
-		session gockle.Session
-		err     error
-	)
-
-	backend := logging.NewLogBackend(os.Stderr, "", 0)
-	backendFormatter := logging.NewBackendFormatter(backend, format)
-	logging.SetBackend(backendFormatter)
-
-	err = setupGremlin(gremlinCluster)
-	if err != nil {
-		log.Fatalf("Failed to connect to Gremlin server: %s", err)
+func (s *Sync) handlePendingNotification(n Notification) {
+	switch n.Oper {
+	// On DELETE, remove previous notifications in the pending list
+	case "DELETE":
+		for i := 0; i < len(s.pending); i++ {
+			n2 := s.pending[i]
+			if n2.UUID == n.UUID {
+				s.removePendingNotification(n2, i)
+				i--
+			}
+		}
+	// Reduce resource updates
+	case "UPDATE":
+		for i := 0; i < len(s.pending); i++ {
+			n2 := s.pending[i]
+			if n2.UUID == n.UUID && n2.Oper == n.Oper {
+				s.removePendingNotification(n2, i)
+				i--
+			}
+		}
 	}
-
-	session, err = setupCassandra(cassandraCluster)
-	if err != nil {
-		log.Fatalf("Failed to connect to Cassandra: %s", err)
-	}
-	defer session.Close()
-
-	conn, _, msgs = setupRabbit(rabbitURI, rabbitVHost, rabbitQueue)
-	defer conn.Close()
-
-	log.Notice("Listening for updates.")
-	go synchronize(session, msgs, historize)
-
-	log.Notice("To exit press CTRL+C")
-	forever := make(chan bool)
-	<-forever
+	s.pending = append(s.pending, n)
+	log.Debugf("[%s] %s/%s [+]", n.Oper, n.Type, n.UUID)
 }
 
-func getContrailResource(session gockle.Session, uuid string) (Vertex, error) {
+func (s Sync) handleNotification(n Notification) bool {
+	switch n.Oper {
+	case "CREATE":
+		node, err := s.getContrailResource(n.UUID)
+		if err != nil {
+			log.Errorf("[%s] %s/%s failed: %s", n.Oper, n.Type, n.UUID, err)
+		} else {
+			node.Create()
+			node.CreateLinks()
+			log.Debugf("[%s] %s/%s", n.Oper, n.Type, n.UUID)
+		}
+		return true
+	case "UPDATE":
+		node, err := s.getContrailResource(n.UUID)
+		if err != nil {
+			log.Errorf("[%s] %s/%s failed: %s", n.Oper, n.Type, n.UUID, err)
+		} else {
+			node.Update()
+			node.UpdateLinks()
+			log.Debugf("[%s] %s/%s", n.Oper, n.Type, n.UUID)
+		}
+		return true
+	case "DELETE":
+		node := Vertex{ID: n.UUID}
+		var err error
+		if s.historize {
+			err = node.SetDeleted()
+		} else {
+			err = node.Delete()
+		}
+		if err != nil {
+			log.Errorf("[%s] %s/%s failed: %s", n.Oper, n.Type, n.UUID, err)
+		} else {
+			log.Debugf("[%s] %s/%s", n.Oper, n.Type, n.UUID)
+		}
+		return true
+	default:
+		log.Errorf("Notification not handled: %s", n)
+		return false
+	}
+}
+
+func (s *Sync) getContrailResource(uuid string) (Vertex, error) {
 	var (
 		column1   string
 		valueJSON []byte
 	)
-	rows, err := session.ScanMapSlice(`SELECT key, column1, value FROM obj_uuid_table WHERE key=?`, uuid)
+	rows, err := s.session.ScanMapSlice(`SELECT key, column1, value FROM obj_uuid_table WHERE key=?`, uuid)
 	if err != nil {
 		log.Criticalf("[%s] %s", uuid, err)
 		return Vertex{}, err
@@ -551,6 +543,77 @@ func getContrailResource(session gockle.Session, uuid string) (Vertex, error) {
 	node.AddProperty("deleted", 0)
 
 	return node, nil
+}
+
+func (s *Sync) setupGremlin(gremlinCluster []string) (err error) {
+	if err := gremlin.NewCluster(gremlinCluster...); err != nil {
+		log.Fatal("Failed to connect to gremlin server.")
+	} else {
+		for {
+			_, _, err = gremlin.CreateConnection()
+			if err != nil {
+				log.Warningf("Failed to connect to Gremlin server, retrying in 1s")
+				time.Sleep(time.Duration(1) * time.Second)
+			} else {
+				log.Notice("Connected to Gremlin server.")
+				for _, n := range s.pending {
+					s.handleNotification(n)
+				}
+				s.pending = make([]Notification, 0)
+				s.connected = true
+				break
+			}
+		}
+	}
+	return err
+}
+
+func setupCassandra(cassandraCluster []string) (gockle.Session, error) {
+	log.Notice("Connecting to Cassandra...")
+	cluster := gocql.NewCluster(cassandraCluster...)
+	cluster.Keyspace = "config_db_uuid"
+	cluster.Consistency = gocql.Quorum
+	cluster.Timeout = 2000 * time.Millisecond
+	cluster.DisableInitialHostLookup = true
+	session, err := cluster.CreateSession()
+	if err != nil {
+		return nil, err
+	}
+	mockableSession := gockle.NewSession(session)
+	log.Notice("Connected.")
+	return mockableSession, err
+}
+
+func setup(gremlinCluster []string, cassandraCluster []string, rabbitURI string, rabbitVHost string, rabbitQueue string, historize bool) {
+	var (
+		conn    *amqp.Connection
+		msgs    <-chan amqp.Delivery
+		session gockle.Session
+		err     error
+	)
+
+	backend := logging.NewLogBackend(os.Stderr, "", 0)
+	backendFormatter := logging.NewBackendFormatter(backend, format)
+	logging.SetBackend(backendFormatter)
+
+	session, err = setupCassandra(cassandraCluster)
+	if err != nil {
+		log.Fatalf("Failed to connect to Cassandra: %s", err)
+	}
+	defer session.Close()
+
+	conn, _, msgs = setupRabbit(rabbitURI, rabbitVHost, rabbitQueue)
+	defer conn.Close()
+
+	sync := NewSync(session, msgs, historize)
+
+	go sync.setupGremlin(gremlinCluster)
+	go sync.synchronize()
+
+	log.Notice("Listening for updates.")
+	log.Notice("To exit press CTRL+C")
+	forever := make(chan bool)
+	<-forever
 }
 
 func main() {
