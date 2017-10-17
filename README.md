@@ -5,14 +5,19 @@ This project contains a set of tools for using gremlin in the context of contrai
  * gremlin-dump: a go program that dumps the contrail DB in a GraphSON file that can be loaded by gremlin server/console
  * gremlin-sync: a go program that sync the contrail DB in the gremlin server
  * gremlin-fsck: a `contrail-api-cli` command that runs consistency checks and apply fixes where possible in contrail
+ * gremlin-checks: a groovy script to run consistency checks against the gremlin console
 
 Binairies are available at https://github.com/eonpatapon/contrail-gremlin-binaries
+
+# Quickstart
+
+To have a quick look at what this project can do you can try the docker image. Follow instructions at https://github.com/eonpatapon/contrail-gremlin/tree/master/docker.
 
 # Use cases for contrail-gremlin
 
 Checks for inconsistencies are the main use cases. With the speed and expressivity of the gremlin language we can easily detect them almost in realtime.
 
-More checks can be found in the `gremlin-fsck` package. Let's take a look at some examples:
+More checks can be found in the `gremlin-checks` repositories. Let's take a look at some examples.
 
 ### A note on links
 
@@ -238,7 +243,7 @@ With `gremlin-sync` it is possible to keep deleted resources in the gremlin serv
     12:06:11.099 setup ▶ NOTI 006 Listening for updates.
     12:06:11.099 setup ▶ NOTI 007 To exit press CTRL+C
 
-## Using gremlin-fsck
+# Using gremlin-fsck
 
 `gremlin-fsck` is a contrail-api-cli command. It will run different consistency checks on the gremlin server and clean/fix resources if needed with some `contrail-api-cli-extra` commands.
 
@@ -248,4 +253,4 @@ With `gremlin-sync` it is possible to keep deleted resources in the gremlin serv
 
     contrail-api-cli fsck [--clean] [--loop] ...
 
-See --help for all options.
+See `--help` for all options.
